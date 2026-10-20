@@ -1,0 +1,6 @@
+{
+  "name": "Zombie Frontier: Survival Command",
+  "description": "A zombie survival strategy game where you manage a base and command a squad.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
