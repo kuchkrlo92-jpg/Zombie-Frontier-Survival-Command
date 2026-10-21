@@ -33,6 +33,7 @@ fun SettingsScreen(navController: NavController) {
     var graphicsQuality by remember { mutableStateOf(GameSettings.getGraphicsQuality(context)) }
     var damageNumbersEnabled by remember { mutableStateOf(GameSettings.isShowDamageNumbers(context)) }
     var joystickSensitivity by remember { mutableFloatStateOf(GameSettings.getJoystickSensitivity(context)) }
+    var difficulty by remember { mutableStateOf(GameSettings.getDifficulty(context)) }
     var showRestoreDialog by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -191,6 +192,29 @@ fun SettingsScreen(navController: NavController) {
                             inactiveTrackColor = Color(0xFF37474F)
                         )
                     )
+                    Spacer(Modifier.height(16.dp))
+                    Text("Game Difficulty", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val diffs = listOf("EASY", "NORMAL", "HARD")
+                        diffs.forEach { d ->
+                            Button(
+                                onClick = {
+                                    difficulty = d
+                                    GameSettings.setDifficulty(context, d)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (difficulty == d) Color(0xFFFFB300) else Color(0xFF263238)
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(d, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
             }
 

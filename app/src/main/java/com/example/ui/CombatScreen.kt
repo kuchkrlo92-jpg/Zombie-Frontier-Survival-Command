@@ -202,9 +202,15 @@ fun CombatScreen(
         val gates = generateTacticalGates(if (isSurvivalMode) 3000f else targetDistance)
         val obstacles = generateObstacles(if (isSurvivalMode) 3000f else targetDistance)
 
-        val initialBoss = if (isBossMission) {
+        val initialBoss = if (isBossMission || isSurvivalMode) {
+            val type = when {
+                isSurvivalMode -> BossType.PLAGUE_QUEEN
+                missionId == 3 -> BossType.IRON_TYRANT
+                else -> BossType.ABOMINATION
+            }
             BossState(
-                name = "THE ABOMINATION",
+                name = when(type) { BossType.IRON_TYRANT -> "THE IRON TYRANT"; BossType.PLAGUE_QUEEN -> "THE PLAGUE QUEEN"; else -> "THE ABOMINATION" },
+                bossType = type,
                 health = 1500,
                 maxHealth = 1500,
                 distanceZ = 140f,
@@ -722,10 +728,31 @@ fun CombatScreen(
                 val lane = (0..2).random()
                 val isRunner = Random.nextFloat() < 0.35f
                 val isBrute = Random.nextFloat() < 0.15f
-                val type = if (isBrute) "Brute" else if (isRunner) "Runner" else "Walker"
-                val hp = if (isBrute) 220 else if (isRunner) 30 else 50
-                val spd = (if (isBrute) 0.8f else if (isRunner) 2.6f else 1.3f) * state.zombieSpeedMult
-                val dmg = ((if (isBrute) 20 else if (isRunner) 12 else 10) * state.zombieDamageMult).toInt()
+                val isSpitter = Random.nextFloat() < 0.10f
+                val type = when {
+                    isBrute -> "Brute"
+                    isRunner -> "Runner"
+                    isSpitter -> "ToxicSpitter"
+                    else -> "Walker"
+                }
+                val hp = when (type) {
+                    "Brute" -> 220
+                    "Runner" -> 30
+                    "ToxicSpitter" -> 70
+                    else -> 50
+                }
+                val spd = (when (type) {
+                    "Brute" -> 0.8f
+                    "Runner" -> 2.6f
+                    "ToxicSpitter" -> 1.0f
+                    else -> 1.3f
+                }) * state.zombieSpeedMult
+                val dmg = ((when (type) {
+                    "Brute" -> 20
+                    "Runner" -> 12
+                    "ToxicSpitter" -> 15
+                    else -> 10
+                }) * state.zombieDamageMult).toInt()
 
                 newZombies.add(
                     Zombie(
@@ -1279,6 +1306,25 @@ fun CombatScreen(
                 },
                 containerColor = Color(0xFF1E2228)
             )
+        }
+
+        // Tutorial Overlay
+        if (combatState.player.runDistance < 100f && !combatState.isPaused) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xAA000000))
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("TUTORIAL", color = Color(0xFFFFB300), fontWeight = FontWeight.Black, fontSize = 24.sp)
+                    Spacer(Modifier.height(16.dp))
+                    Text("SWIPE TO CHOOSE YOUR LANE", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Use swipe gestures or bottom buttons to dodge hazards.", color = Color.LightGray, fontSize = 14.sp)
+                }
+            }
         }
 
         // VICTORY DIALOG

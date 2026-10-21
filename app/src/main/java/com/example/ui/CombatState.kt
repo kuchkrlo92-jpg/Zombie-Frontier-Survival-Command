@@ -40,8 +40,15 @@ enum class BossPattern {
     EXECUTE_SUMMON
 }
 
+enum class BossType {
+    ABOMINATION,
+    IRON_TYRANT,
+    PLAGUE_QUEEN
+}
+
 data class BossState(
     val name: String = "THE ABOMINATION",
+    val bossType: BossType = BossType.ABOMINATION,
     var position: Offset = Offset(880f, 480f),
     var health: Int = 1200,
     var maxHealth: Int = 1200,
@@ -283,6 +290,7 @@ data class CombatState(
     val tacticalGates: List<TacticalGate> = emptyList(),
     val laneObstacles: List<LaneObstacle> = emptyList(),
     val laneShockwaves: List<LaneShockwave> = emptyList(),
+    val laneBullets: List<LaneBullet> = emptyList(),
     val activeBuffNotice: String? = null,
     val activeBuffTtl: Int = 0,
 
