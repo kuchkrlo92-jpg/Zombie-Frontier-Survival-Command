@@ -31,7 +31,7 @@ fun MainMenuScreen(
     val equippedWeaponData by viewModel.equippedWeapon.collectAsState()
     val (weaponDef, weaponLevel) = equippedWeaponData
     val missionsList by viewModel.missions.collectAsState()
-    val completedCount = missionsList.count { it.isCompleted }
+    val completedCount = missionsList.count { it.isCompleted && it.missionId in 1..4 }
 
     Scaffold(
         containerColor = Color(0xFF0F1215)
@@ -109,7 +109,7 @@ fun MainMenuScreen(
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             Text("CAMPAIGN PROGRESS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF90A4AE))
-                            Text("$completedCount/3 Missions Cleared", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
+                            Text("$completedCount/4 Missions Cleared", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
                         }
                     }
                 }

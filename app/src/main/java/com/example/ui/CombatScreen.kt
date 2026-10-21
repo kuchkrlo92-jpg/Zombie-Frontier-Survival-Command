@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -10,6 +11,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -17,20 +20,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.drawscope.withTransform
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.navigation.NavController
 import com.example.data.GameSettings
 import com.example.data.WeaponCatalog
@@ -53,10 +52,13 @@ fun CombatScreen(
 
     val equippedWeaponData by viewModel.equippedWeapon.collectAsState()
     val (weaponDef, weaponLevel) = equippedWeaponData
+    val missionsList by viewModel.missions.collectAsState()
+    val survivalRecord = missionsList.find { it.missionId == 100 }
+    val bestSavedWave = survivalRecord?.bestScore?.toInt() ?: 0
 
     // Settings
-    val sensitivity = remember { GameSettings.getJoystickSensitivity(context) }
     val showDamageNumbers = remember { GameSettings.isShowDamageNumbers(context) }
+    val graphicsQuality = remember { GameSettings.getGraphicsQuality(context) }
     val isSurvivalMode = (missionId == 100)
     val isBossMission = (missionId == 4)
 
@@ -69,12 +71,20 @@ fun CombatScreen(
         else -> "Abandoned Highway"
     }
 
+    val targetDistance = when (missionId) {
+        1 -> 500f
+        2 -> 700f
+        3 -> 900f
+        4 -> 750f
+        else -> 500f
+    }
+
     val targetKills = when (missionId) {
-        1 -> 15
-        2 -> 25
-        3 -> 35
+        1 -> 20
+        2 -> 35
+        3 -> 50
         4 -> 1 // Defeat The Abomination
-        else -> 15
+        else -> 20
     }
 
     val (rewardCoins, rewardFood) = when (missionId) {
@@ -86,10 +96,10 @@ fun CombatScreen(
     }
 
     val magazineCapacity = when (weaponDef.id) {
-        1 -> 30 // Assault Rifle
-        2 -> 45 // SMG
-        3 -> 8  // Shotgun
-        4 -> 5  // Sniper
+        1 -> 30 // M4A1 Sentinel
+        2 -> 45 // Vector Venom
+        3 -> 8  // Breacher 12G
+        4 -> 5  // Barrett Reaper
         else -> 30
     }
 
@@ -102,49 +112,137 @@ fun CombatScreen(
     }
 
     fun getWaveTotalEnemies(wave: Int): Int = when (wave) {
-        1 -> 10
-        2 -> 16
-        3 -> 21
-        4 -> 28
-        5 -> 7 // Boss (The Abomination) + 6 escorts
-        else -> 10 + wave * 5
+        1 -> 15
+        2 -> 25
+        3 -> 35
+        4 -> 45
+        5 -> 8 // Boss (The Abomination) + 7 escorts
+        else -> 15 + wave * 8
+    }
+
+    fun calculateSurvivalRewards(fromWave: Int, toWave: Int): Pair<Long, Long> {
+        var c = 0L
+        var f = 0L
+        if (toWave > fromWave) {
+            for (w in (fromWave + 1)..toWave) {
+                val (wc, wf) = when (w) {
+                    1 -> Pair(150L, 50L)
+                    2 -> Pair(300L, 100L)
+                    3 -> Pair(500L, 200L)
+                    4 -> Pair(750L, 300L)
+                    5 -> Pair(1200L, 500L)
+                    else -> Pair(200L, 50L)
+                }
+                c += wc
+                f += wf
+            }
+        }
+        return Pair(c, f)
+    }
+
+    // Pre-generate balanced tactical gates along the highway
+    fun generateTacticalGates(totalDist: Float): List<TacticalGate> {
+        val gates = mutableListOf<TacticalGate>()
+        var gateId = 1
+        var dist = 80f
+        while (dist < totalDist - 50f) {
+            when (gateId % 5) {
+                1 -> {
+                    // Left: +5 Survivors vs Right: DMG +25%
+                    gates.add(TacticalGate(gateId++, 0, dist, GateType.RECRUIT_SURVIVORS, "+5 SURVIVORS", 5, true))
+                    gates.add(TacticalGate(gateId++, 2, dist, GateType.DAMAGE_BOOST, "DMG +25%", 25, true))
+                }
+                2 -> {
+                    // Left: +30 Ammo vs Center: +10 Riflemen vs Right: Ammo Leak
+                    gates.add(TacticalGate(gateId++, 0, dist, GateType.AMMO_CACHE, "+30 AMMO", 30, true))
+                    gates.add(TacticalGate(gateId++, 1, dist, GateType.RECRUIT_RIFLEMEN, "+10 RIFLEMEN", 10, true))
+                    gates.add(TacticalGate(gateId++, 2, dist, GateType.AMMO_LEAK, "-15 AMMO", 15, false))
+                }
+                3 -> {
+                    // Left: +200 Metal vs Right: Health +40
+                    gates.add(TacticalGate(gateId++, 0, dist, GateType.SUPPLY_METAL, "+200 METAL", 200, true))
+                    gates.add(TacticalGate(gateId++, 2, dist, GateType.FIELD_MEDIC, "HEALTH +40", 40, true))
+                }
+                4 -> {
+                    // Center: Fire Rate +20% vs Right: +300 Coins
+                    gates.add(TacticalGate(gateId++, 1, dist, GateType.FIRE_RATE_BOOST, "RATE +20%", 20, true))
+                    gates.add(TacticalGate(gateId++, 2, dist, GateType.SUPPLY_COINS, "+300 COINS", 300, true))
+                }
+                else -> {
+                    // Left: Ambush vs Right: +5 Survivors
+                    gates.add(TacticalGate(gateId++, 0, dist, GateType.ZOMBIE_AMBUSH, "AMBUSH!", 0, false))
+                    gates.add(TacticalGate(gateId++, 2, dist, GateType.RECRUIT_SURVIVORS, "+5 SURVIVORS", 5, true))
+                }
+            }
+            dist += 110f
+        }
+        return gates
+    }
+
+    // Pre-generate road obstacles
+    fun generateObstacles(totalDist: Float): List<LaneObstacle> {
+        val obstacles = mutableListOf<LaneObstacle>()
+        var obsId = 1
+        var dist = 50f
+        while (dist < totalDist - 30f) {
+            val lane = (obsId * 7) % 3
+            val type = when (obsId % 4) {
+                0 -> LaneObstacleType.WRECKED_CAR
+                1 -> LaneObstacleType.BURNING_BARRIER
+                2 -> LaneObstacleType.TOXIC_BARRELS
+                else -> LaneObstacleType.CONCRETE_BLOCK
+            }
+            obstacles.add(LaneObstacle(obsId++, lane, dist, type, type.name))
+            dist += 75f
+        }
+        return obstacles
     }
 
     fun createInitialState(): CombatState {
-        val obstacles = when {
-            isSurvivalMode -> listOf(
-                Obstacle(Offset(340f, 300f), 85f, 45f, "DEFENSE SANDBAGS"),
-                Obstacle(Offset(600f, 520f), 100f, 50f, "BURNING BARRIER"),
-                Obstacle(Offset(750f, 280f), 75f, 75f, "CONCRETE SLAB")
-            )
-            isBossMission -> listOf(
-                Obstacle(Offset(320f, 260f), 90f, 50f, "CRYO TANK"),
-                Obstacle(Offset(680f, 580f), 90f, 50f, "BIO-CONTAINER")
-            )
-            missionId == 1 -> listOf(
-                Obstacle(Offset(350f, 320f), 90f, 45f, "WRECKED SEDAN"),
-                Obstacle(Offset(600f, 540f), 110f, 55f, "BURNING TRUCK")
-            )
-            missionId == 2 -> listOf(
-                Obstacle(Offset(320f, 280f), 80f, 80f, "RUBBLE PILE"),
-                Obstacle(Offset(580f, 480f), 90f, 60f, "COLLAPSED WALL"),
-                Obstacle(Offset(750f, 300f), 70f, 70f, "CRACKED SLAB")
-            )
-            else -> listOf(
-                Obstacle(Offset(300f, 260f), 100f, 40f, "SANDBAG BUNKER"),
-                Obstacle(Offset(520f, 550f), 120f, 30f, "BARBED BARRIER"),
-                Obstacle(Offset(720f, 340f), 90f, 40f, "COMMAND TRENCH")
-            )
-        }
+        val gates = generateTacticalGates(if (isSurvivalMode) 3000f else targetDistance)
+        val obstacles = generateObstacles(if (isSurvivalMode) 3000f else targetDistance)
 
         val initialBoss = if (isBossMission) {
             BossState(
                 name = "THE ABOMINATION",
-                position = Offset(880f, 480f),
-                health = 1200,
-                maxHealth = 1200
+                health = 1500,
+                maxHealth = 1500,
+                distanceZ = 140f,
+                lane = 1,
+                targetLane = 1,
+                telegraphLane = 1,
+                visualLaneX = 1f
             )
         } else null
+
+        val selectedDifficulty = GameSettings.getDifficulty(context)
+        val initialSpeedMult = when (selectedDifficulty) { "EASY" -> 0.8f; "HARD" -> 1.25f; else -> 1.0f }
+        val initialDamageMult = when (selectedDifficulty) { "EASY" -> 0.7f; "HARD" -> 1.35f; else -> 1.0f }
+
+        // Initial pack of oncoming zombies
+        val initialZombies = mutableListOf<Zombie>()
+        var zId = 1
+        for (i in 0 until 8) {
+            val zLane = (i % 3)
+            val zDist = 120f + i * 25f
+            val zType = if (i % 3 == 0) "Runner" else "Walker"
+            val hp = if (zType == "Runner") 30 else 50
+            val speed = (if (zType == "Runner") 2.4f else 1.2f) * initialSpeedMult
+            val damage = ((if (zType == "Runner") 12 else 10) * initialDamageMult).toInt()
+            initialZombies.add(
+                Zombie(
+                    id = zId++,
+                    lane = zLane,
+                    distanceZ = zDist,
+                    visualLaneX = zLane.toFloat(),
+                    health = hp,
+                    maxHealth = hp,
+                    type = zType,
+                    speed = speed,
+                    damage = damage
+                )
+            )
+        }
 
         return CombatState(
             missionId = missionId,
@@ -152,31 +250,82 @@ fun CombatScreen(
             missionTitle = missionTitle,
             weaponDef = weaponDef,
             weaponLevel = weaponLevel,
-            obstacles = obstacles,
+            tacticalGates = gates,
+            laneObstacles = obstacles,
+            zombies = initialZombies,
+            difficulty = selectedDifficulty,
             isSurvivalMode = isSurvivalMode,
             currentWave = 1,
             maxWaves = 5,
             waveEnemiesTotal = if (isSurvivalMode) getWaveTotalEnemies(1) else targetKills,
-            waveEnemiesSpawned = 0,
-            waveAnnouncement = if (isSurvivalMode) "WAVE 1 // SURVIVE THE HORDE" else null,
+            waveEnemiesSpawned = if (isSurvivalMode) 8 else 8,
+            waveAnnouncement = if (isSurvivalMode) "WAVE 1 // SURVIVE THE HIGHWAY" else null,
             waveAnnouncementTtl = if (isSurvivalMode) 60 else 0,
             boss = initialBoss,
             player = PlayerState(
-                position = Offset(140f, 480f),
+                currentLane = 1,
+                visualLaneX = 1f,
+                squadCount = 1,
+                runDistance = 0f,
+                targetDistance = targetDistance,
                 health = 100,
                 maxHealth = 100,
                 ammoCurrent = magazineCapacity,
                 ammoMax = magazineCapacity,
-                reloadDurationMs = reloadDurationMs
+                reloadDurationMs = reloadDurationMs,
+                damageMultiplier = 1.0f,
+                fireRateMultiplier = 1.0f
             )
         )
     }
 
+    var sessionKey by remember { mutableIntStateOf(0) }
     var combatState by remember { mutableStateOf(createInitialState()) }
     var isHoldingFire by remember { mutableStateOf(false) }
 
+    // Suspend and pause gameplay on Android Lifecycle backgrounding
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
+        if (!combatState.isGameOver && !combatState.isVictory) {
+            combatState = combatState.copy(isPaused = true)
+            isHoldingFire = false
+        }
+    }
+
+    // Intercept back button to pause cleanly
+    BackHandler {
+        if (!combatState.isPaused && !combatState.isGameOver && !combatState.isVictory) {
+            combatState = combatState.copy(isPaused = true)
+            isHoldingFire = false
+        } else {
+            navController.popBackStack()
+        }
+    }
+
+    // Movement: Lane Switch Left
+    fun switchLaneLeft() {
+        if (combatState.isGameOver || combatState.isVictory || combatState.isPaused) return
+        if (combatState.player.currentLane > 0) {
+            GameSettings.triggerVibration(context, 15)
+            combatState = combatState.copy(
+                player = combatState.player.copy(currentLane = combatState.player.currentLane - 1)
+            )
+        }
+    }
+
+    // Movement: Lane Switch Right
+    fun switchLaneRight() {
+        if (combatState.isGameOver || combatState.isVictory || combatState.isPaused) return
+        if (combatState.player.currentLane < 2) {
+            GameSettings.triggerVibration(context, 15)
+            combatState = combatState.copy(
+                player = combatState.player.copy(currentLane = combatState.player.currentLane + 1)
+            )
+        }
+    }
+
     // Reload Action
     fun triggerReload() {
+        if (combatState.isGameOver || combatState.isVictory || combatState.isPaused) return
         if (combatState.player.isReloading || combatState.player.ammoCurrent == combatState.player.ammoMax) return
         val now = System.currentTimeMillis()
         SoundFx.playReload(context)
@@ -189,1624 +338,913 @@ fun CombatScreen(
         )
     }
 
-    // Fire helper
-    fun triggerFire() {
+    // Fire Weapon Action
+    fun fireWeapon(force: Boolean = false) {
         if (combatState.isGameOver || combatState.isVictory || combatState.isPaused) return
         val player = combatState.player
 
         if (player.isReloading) return
-
         if (player.ammoCurrent <= 0) {
             triggerReload()
             return
         }
 
         val now = System.currentTimeMillis()
-        if (now - player.lastFireTimeMs < weaponDef.fireRateMs) return
+        val effectiveFireRate = (weaponDef.fireRateMs / player.fireRateMultiplier).toLong()
+        if (now - player.lastFireTimeMs < effectiveFireRate && !force) return
 
-        val bulletDamage = weaponDef.calculateDamage(weaponLevel)
-        val newProjectiles = mutableListOf<Projectile>()
-        val aimAngle = player.facingAngle
-        val fireOrigin = player.position + Offset(cos(aimAngle) * 26f, sin(aimAngle) * 26f)
+        val baseDamage = weaponDef.calculateDamage(weaponLevel)
+        val scaledDamage = (baseDamage * player.damageMultiplier).toInt()
 
-        if (weaponDef.pellets == 1) {
-            val angleSpread = if (weaponDef.spreadAngle > 0f) {
-                ((-10..10).random() / 100f) * weaponDef.spreadAngle
-            } else 0f
-            val totalAngle = aimAngle + angleSpread
-            val vx = weaponDef.projectileSpeed * cos(totalAngle)
-            val vy = weaponDef.projectileSpeed * sin(totalAngle)
+        // Create new lane bullets
+        val newBullets = combatState.laneBullets.toMutableList()
+        val pLane = player.visualLaneX
+        val isCrit = Random.nextFloat() < 0.15f
+        val finalDmg = if (isCrit) (scaledDamage * 1.5f).toInt() else scaledDamage
+        val bulletColor = Color(weaponDef.colorHex)
 
-            val isCrit = Random.nextFloat() < 0.15f
-            val finalDmg = if (isCrit) (bulletDamage * 1.5f).toInt() else bulletDamage
-
-            newProjectiles.add(
-                Projectile(
-                    position = fireOrigin,
-                    velocity = Offset(vx, vy),
-                    damage = finalDmg,
-                    rangeRemaining = weaponDef.range,
-                    size = weaponDef.projectileSize,
-                    color = Color(weaponDef.colorHex),
-                    isCritical = isCrit
-                )
-            )
-        } else {
-            // Shotgun Spread
-            val spreadStep = weaponDef.spreadAngle / (weaponDef.pellets - 1)
-            for (i in 0 until weaponDef.pellets) {
-                val offset = -weaponDef.spreadAngle / 2f + i * spreadStep + ((-5..5).random() / 200f)
-                val totalAngle = aimAngle + offset
-                val vx = weaponDef.projectileSpeed * cos(totalAngle)
-                val vy = weaponDef.projectileSpeed * sin(totalAngle)
-
-                val isCrit = Random.nextFloat() < 0.12f
-                val finalDmg = if (isCrit) (bulletDamage * 1.4f).toInt() else bulletDamage
-
-                newProjectiles.add(
-                    Projectile(
-                        position = fireOrigin,
-                        velocity = Offset(vx, vy),
+        // Weapon distinct firing behavior
+        when (weaponDef.id) {
+            3 -> {
+                // Breacher 12G: Fan spread across the current lane
+                for (p in 0 until weaponDef.pellets) {
+                    val spreadLaneOffset = (-0.25f + p * 0.16f)
+                    newBullets.add(
+                        LaneBullet(
+                            id = (0..100000).random(),
+                            startLaneX = pLane + spreadLaneOffset,
+                            targetLane = player.currentLane,
+                            distanceZ = 4f,
+                            targetDistanceZ = 160f,
+                            speedZ = 24f,
+                            damage = finalDmg,
+                            color = bulletColor,
+                            isCritical = isCrit
+                        )
+                    )
+                }
+            }
+            4 -> {
+                // Barrett Reaper: Heavy armor-piercing round traveling far
+                newBullets.add(
+                    LaneBullet(
+                        id = (0..100000).random(),
+                        startLaneX = pLane,
+                        targetLane = player.currentLane,
+                        distanceZ = 6f,
+                        targetDistanceZ = 350f,
+                        speedZ = 32f,
                         damage = finalDmg,
-                        rangeRemaining = weaponDef.range,
-                        size = weaponDef.projectileSize,
-                        color = Color(weaponDef.colorHex),
+                        color = Color(0xFF00E5FF),
+                        isCritical = true
+                    )
+                )
+            }
+            else -> {
+                // M4A1 Sentinel / Vector Venom
+                newBullets.add(
+                    LaneBullet(
+                        id = (0..100000).random(),
+                        startLaneX = pLane,
+                        targetLane = player.currentLane,
+                        distanceZ = 5f,
+                        targetDistanceZ = 220f,
+                        speedZ = 22f,
+                        damage = finalDmg,
+                        color = bulletColor,
                         isCritical = isCrit
                     )
                 )
             }
         }
 
-        SoundFx.playGunshot(context, weaponDef.type)
-        val vibeDuration = when (weaponDef.id) {
-            3 -> 30L
-            4 -> 40L
-            else -> 12L
+        // Support Fire from recruited squad members
+        if (player.squadCount > 1) {
+            val supportCount = minOf(6, player.squadCount / 2)
+            for (s in 0 until supportCount) {
+                val squadOffset = if (s % 2 == 0) -0.3f - (s * 0.1f) else 0.3f + (s * 0.1f)
+                newBullets.add(
+                    LaneBullet(
+                        id = (0..100000).random(),
+                        startLaneX = pLane + squadOffset,
+                        targetLane = player.currentLane,
+                        distanceZ = 2f,
+                        targetDistanceZ = 200f,
+                        speedZ = 20f,
+                        damage = maxOf(10, (scaledDamage * 0.45f).toInt()),
+                        color = Color(0xFF81D4FA),
+                        isSquadBullet = true
+                    )
+                )
+            }
         }
-        GameSettings.triggerVibration(context, vibeDuration)
 
-        val flashEffect = Effect(
-            position = fireOrigin,
-            type = "Flash",
-            ttl = 4,
-            color = Color(0xFFFFF176),
-            size = 18f
-        )
+        SoundFx.playGunshot(context, weaponDef.name)
+        GameSettings.triggerVibration(context, 10)
 
-        val ejectAngle = aimAngle - PI.toFloat() / 2f + ((-20..20).random() / 100f)
-        val ejectVel = Offset(cos(ejectAngle) * 3.5f, sin(ejectAngle) * 3.5f)
-        val shell = ShellCasing(
-            position = player.position + Offset(cos(aimAngle) * 8f, sin(aimAngle) * 8f),
-            velocity = ejectVel,
-            rotation = Random.nextFloat() * 360f,
-            ttl = 28
-        )
-
-        val nextAmmo = player.ammoCurrent - 1
         combatState = combatState.copy(
             player = player.copy(
-                lastFireTimeMs = now,
-                ammoCurrent = nextAmmo
+                ammoCurrent = player.ammoCurrent - 1,
+                lastFireTimeMs = now
             ),
-            projectiles = combatState.projectiles + newProjectiles,
-            effects = combatState.effects + flashEffect,
-            shellCasings = (combatState.shellCasings + shell).takeLast(20),
-            totalShotsFired = combatState.totalShotsFired + (if (weaponDef.pellets > 1) weaponDef.pellets else 1)
+            laneBullets = newBullets,
+            totalShotsFired = combatState.totalShotsFired + 1
         )
-
-        if (nextAmmo <= 0) {
-            triggerReload()
-        }
     }
 
     // Main 60FPS Game Loop
-    LaunchedEffect(missionId, weaponDef, weaponLevel) {
+    LaunchedEffect(missionId, weaponDef, weaponLevel, sessionKey) {
         var lastSpawnTime = System.currentTimeMillis()
+        var pauseStartTime = 0L
 
         while (!combatState.isGameOver && !combatState.isVictory) {
             if (combatState.isPaused) {
+                if (pauseStartTime == 0L) {
+                    pauseStartTime = System.currentTimeMillis()
+                }
                 delay(100)
                 continue
             }
-            delay(16) // ~60 FPS
+
+            if (pauseStartTime != 0L) {
+                val pausedDuration = System.currentTimeMillis() - pauseStartTime
+                lastSpawnTime += pausedDuration
+                pauseStartTime = 0L
+            }
 
             val now = System.currentTimeMillis()
+            var state = combatState
 
-            // 0. Hold-to-fire execution
-            if (isHoldingFire) {
-                triggerFire()
-            }
-
-            // 1. Update Player Reload State
-            var currentPlayer = combatState.player
-            if (currentPlayer.isReloading) {
-                if (now - currentPlayer.reloadTimerMs >= currentPlayer.reloadDurationMs) {
-                    currentPlayer = currentPlayer.copy(
-                        isReloading = false,
-                        ammoCurrent = currentPlayer.ammoMax
+            // 1. Reload timer update
+            if (state.player.isReloading) {
+                if (now - state.player.reloadTimerMs >= state.player.reloadDurationMs) {
+                    state = state.copy(
+                        player = state.player.copy(
+                            isReloading = false,
+                            ammoCurrent = state.player.ammoMax
+                        )
                     )
                 }
             }
 
-            // 2. Move Player & Aiming
-            val moveSpeed = 5.2f * sensitivity
-            val hasMovement = combatState.joystickInput.getDistance() > 0.05f
-            val nextX = (currentPlayer.position.x + combatState.joystickInput.x * moveSpeed).coerceIn(40f, 960f)
-            val nextY = (currentPlayer.position.y + combatState.joystickInput.y * moveSpeed).coerceIn(180f, 820f)
-            val nextWalkAnim = if (hasMovement) currentPlayer.walkAnimPhase + 0.22f else currentPlayer.walkAnimPhase
+            // 2. Smooth lane movement
+            val currentLaneX = state.player.currentLane.toFloat()
+            val newVisualX = state.player.visualLaneX + (currentLaneX - state.player.visualLaneX) * 0.22f
+            val newRunDist = state.player.runDistance + (state.player.runSpeed * 0.48f)
+            val newWalkPhase = (state.player.walkAnimPhase + 0.15f) % 6.28f
 
-            // Auto-aim towards nearest living threat (Boss takes priority if near, then zombies)
-            val livingZombies = combatState.zombies.filter { !it.isDying }
-            val currentBoss = combatState.boss
-            val targetPos = if (currentBoss != null && !currentBoss.isDying && (currentBoss.position - currentPlayer.position).getDistance() < 550f) {
-                currentBoss.position
-            } else {
-                val nearestZombie = livingZombies.minByOrNull { (it.position - currentPlayer.position).getDistance() }
-                if (nearestZombie != null && (nearestZombie.position - currentPlayer.position).getDistance() < 550f) {
-                    nearestZombie.position
-                } else null
-            }
-
-            val targetAngle = if (targetPos != null) {
-                val diff = targetPos - currentPlayer.position
-                atan2(diff.y, diff.x)
-            } else if (hasMovement) {
-                atan2(combatState.joystickInput.y, combatState.joystickInput.x)
-            } else {
-                currentPlayer.facingAngle
-            }
-
-            val currentAngle = currentPlayer.facingAngle
-            var angleDiff = (targetAngle - currentAngle) % (2f * PI.toFloat())
-            if (angleDiff > PI.toFloat()) angleDiff -= 2f * PI.toFloat()
-            if (angleDiff < -PI.toFloat()) angleDiff += 2f * PI.toFloat()
-            val newFacingAngle = currentAngle + angleDiff * 0.28f
-
-            currentPlayer = currentPlayer.copy(
-                position = Offset(nextX, nextY),
-                facingAngle = newFacingAngle,
-                walkAnimPhase = nextWalkAnim
+            var newPlayer = state.player.copy(
+                visualLaneX = newVisualX,
+                runDistance = newRunDist,
+                walkAnimPhase = newWalkPhase
             )
 
-            // 3. Wave Transition & Enemy Spawning Engine
-            var currentWave = combatState.currentWave
-            var waveEnemiesTotal = combatState.waveEnemiesTotal
-            var waveEnemiesSpawned = combatState.waveEnemiesSpawned
-            var isWaveBreak = combatState.isWaveBreak
-            var waveBreakTimer = combatState.waveBreakTimer
-            var waveAnnouncement = combatState.waveAnnouncement
-            var waveAnnouncementTtl = (combatState.waveAnnouncementTtl - 1).coerceAtLeast(0)
-            if (waveAnnouncementTtl <= 0) waveAnnouncement = null
-
-            var currentZombies = combatState.zombies
-            var updatedBoss = combatState.boss
-
-            // Handle Inter-Wave Break in Survival Mode
-            if (isSurvivalMode && isWaveBreak) {
-                waveBreakTimer--
-                if (waveBreakTimer <= 0) {
-                    isWaveBreak = false
-                    currentWave++
-                    waveEnemiesTotal = getWaveTotalEnemies(currentWave)
-                    waveEnemiesSpawned = 0
-                    waveAnnouncement = "WAVE $currentWave // INCOMING!"
-                    waveAnnouncementTtl = 65
-                    SoundFx.playBossRoar(context)
-
-                    // Spawn boss if Wave 5
-                    if (currentWave == 5 && updatedBoss == null) {
-                        updatedBoss = BossState(
-                            name = "THE ABOMINATION",
-                            position = Offset(900f, 480f),
-                            health = 1200,
-                            maxHealth = 1200
-                        )
-                    }
-                }
-            }
-
-            // Normal Zombie Spawning
-            val livingCount = currentZombies.count { !it.isDying }
-            val canSpawn = if (isSurvivalMode) {
-                !isWaveBreak && waveEnemiesSpawned < waveEnemiesTotal && livingCount < 10
-            } else if (isBossMission) {
-                livingCount < 3 // Maintain small escort group
-            } else {
-                combatState.killCount + currentZombies.size < combatState.targetKills + 5 && livingCount < 10
-            }
-
-            val spawnInterval = when {
-                isSurvivalMode -> (900L - (currentWave * 70L)).coerceAtLeast(550L)
-                missionId == 2 -> 900L
-                missionId >= 3 -> 750L
-                else -> 1200L
-            }
-
-            if (canSpawn && (now - lastSpawnTime > spawnInterval)) {
-                lastSpawnTime = now
-                val spawnY = (220..780).random().toFloat()
-                val spawnPos = Offset(1080f, spawnY)
-
-                val newZombie = when {
-                    isSurvivalMode -> {
-                        val rand = (0..100).random()
-                        when (currentWave) {
-                            1 -> Zombie((0..99999).random(), spawnPos, 100, 100, "Walker", 2.0f, 10, 16f)
-                            2 -> {
-                                if (rand < 70) Zombie((0..99999).random(), spawnPos, 105, 105, "Walker", 2.1f, 10, 16f)
-                                else Zombie((0..99999).random(), spawnPos, 65, 65, "Runner", 4.3f, 8, 13f)
-                            }
-                            3 -> {
-                                if (rand < 50) Zombie((0..99999).random(), spawnPos, 115, 115, "Walker", 2.2f, 12, 16f)
-                                else if (rand < 85) Zombie((0..99999).random(), spawnPos, 75, 75, "Runner", 4.5f, 10, 13f)
-                                else Zombie((0..99999).random(), spawnPos, 320, 320, "Brute", 1.25f, 28, 26f)
-                            }
-                            4 -> {
-                                if (rand < 35) Zombie((0..99999).random(), spawnPos, 130, 130, "Walker", 2.4f, 14, 16f)
-                                else if (rand < 75) Zombie((0..99999).random(), spawnPos, 85, 85, "Runner", 4.8f, 12, 13f)
-                                else Zombie((0..99999).random(), spawnPos, 380, 380, "Brute", 1.35f, 32, 28f)
-                            }
-                            else -> {
-                                // Wave 5 Escorts
-                                if (rand < 65) Zombie((0..99999).random(), spawnPos, 90, 90, "Runner", 4.7f, 12, 13f)
-                                else Zombie((0..99999).random(), spawnPos, 350, 350, "Brute", 1.3f, 30, 27f)
-                            }
+            // 3. Tactical Gate Triggering
+            var banner = state.comboBanner
+            val updatedGates = state.tacticalGates.map { gate ->
+                val relZ = gate.distanceZ - (newRunDist - state.player.runDistance)
+                if (!gate.isPassed && relZ in -6f..3f && abs(newVisualX - gate.lane) < 0.65f) {
+                    // Collect gate!
+                    SoundFx.playCombo(context)
+                    GameSettings.triggerVibration(context, 40)
+                    when (gate.type) {
+                        GateType.RECRUIT_SURVIVORS -> {
+                            newPlayer = newPlayer.copy(squadCount = minOf(30, newPlayer.squadCount + 5))
+                            banner = ComboBanner("RECRUITS JOINED!", "+5 SQUAD SURVIVORS", Color(0xFF00E676))
+                        }
+                        GateType.RECRUIT_RIFLEMEN -> {
+                            newPlayer = newPlayer.copy(squadCount = minOf(30, newPlayer.squadCount + 10))
+                            banner = ComboBanner("RIFLEMEN ATTACHED!", "+10 FIREPOWER SQUAD", Color(0xFF00E5FF))
+                        }
+                        GateType.DAMAGE_BOOST -> {
+                            newPlayer = newPlayer.copy(damageMultiplier = newPlayer.damageMultiplier + 0.25f)
+                            banner = ComboBanner("WEAPON OVERCLOCK!", "DAMAGE +25%", Color(0xFFFFD54F))
+                        }
+                        GateType.FIRE_RATE_BOOST -> {
+                            newPlayer = newPlayer.copy(fireRateMultiplier = newPlayer.fireRateMultiplier + 0.20f)
+                            banner = ComboBanner("RAPID TRIGGER!", "FIRE RATE +20%", Color(0xFFFF9100))
+                        }
+                        GateType.AMMO_CACHE -> {
+                            newPlayer = newPlayer.copy(ammoCurrent = minOf(newPlayer.ammoMax * 2, newPlayer.ammoCurrent + 30))
+                            banner = ComboBanner("AMMO CRATE!", "+30 ROUNDS CACHED", Color(0xFF76FF03))
+                        }
+                        GateType.SUPPLY_METAL -> {
+                            newPlayer = newPlayer.copy(bonusMetalEarned = newPlayer.bonusMetalEarned + 200)
+                            banner = ComboBanner("SUPPLY RUN!", "+200 METAL RECOVERED", Color(0xFF90A4AE))
+                        }
+                        GateType.SUPPLY_COINS -> {
+                            newPlayer = newPlayer.copy(bonusCoinsEarned = newPlayer.bonusCoinsEarned + 300)
+                            banner = ComboBanner("BOUNTY SECURED!", "+300 COINS LOOTED", Color(0xFFFFB300))
+                        }
+                        GateType.FIELD_MEDIC -> {
+                            newPlayer = newPlayer.copy(health = minOf(newPlayer.maxHealth, newPlayer.health + 40))
+                            banner = ComboBanner("FIELD TRIAGE!", "+40 HP RESTORED", Color(0xFF00E676))
+                        }
+                        GateType.SQUAD_HAZARD -> {
+                            newPlayer = newPlayer.copy(squadCount = maxOf(1, newPlayer.squadCount - 3))
+                            banner = ComboBanner("CASUALTIES!", "-3 SQUAD LOST", Color(0xFFFF1744))
+                        }
+                        GateType.ACID_SPILL -> {
+                            newPlayer = newPlayer.copy(health = maxOf(10, newPlayer.health - 20))
+                            banner = ComboBanner("TOXIC SPILL!", "-20 HP HAZARD", Color(0xFFFF1744))
+                        }
+                        GateType.AMMO_LEAK -> {
+                            newPlayer = newPlayer.copy(ammoCurrent = maxOf(0, newPlayer.ammoCurrent - 15))
+                            banner = ComboBanner("MAG DAMAGED!", "-15 AMMO LEAK", Color(0xFFFF5252))
+                        }
+                        GateType.ZOMBIE_AMBUSH -> {
+                            banner = ComboBanner("AMBUSH!", "RUNNERS SPOTTED!", Color(0xFFFF1744))
                         }
                     }
-                    isBossMission -> {
-                        // Boss minions
-                        Zombie((0..99999).random(), spawnPos, 90, 90, "Runner", 4.6f, 10, 13f)
-                    }
-                    missionId == 1 -> {
-                        val rand = (0..100).random()
-                        if (rand < 75) Zombie((0..99999).random(), spawnPos, 100, 100, "Walker", 2.0f, 10, 16f)
-                        else Zombie((0..99999).random(), spawnPos, 60, 60, "Runner", 4.3f, 8, 13f)
-                    }
-                    missionId == 2 -> {
-                        val rand = (0..100).random()
-                        if (rand < 45) Zombie((0..99999).random(), spawnPos, 115, 115, "Walker", 2.2f, 12, 16f)
-                        else if (rand < 82) Zombie((0..99999).random(), spawnPos, 70, 70, "Runner", 4.6f, 10, 13f)
-                        else Zombie((0..99999).random(), spawnPos, 320, 320, "Brute", 1.2f, 28, 26f)
-                    }
-                    else -> {
-                        val rand = (0..100).random()
-                        if (rand < 30) Zombie((0..99999).random(), spawnPos, 130, 130, "Walker", 2.4f, 15, 17f)
-                        else if (rand < 70) Zombie((0..99999).random(), spawnPos, 85, 85, "Runner", 4.9f, 12, 14f)
-                        else Zombie((0..99999).random(), spawnPos, 420, 420, "Brute", 1.35f, 35, 28f)
-                    }
-                }
-                currentZombies = currentZombies + newZombie
-                if (isSurvivalMode) waveEnemiesSpawned++
-            }
-
-            // 4. Move Projectiles and Check Obstacles
-            val newEffects = combatState.effects.map {
-                it.copy(
-                    ttl = it.ttl - 1,
-                    position = it.position + it.velocity
-                )
-            }.filter { it.ttl > 0 }.toMutableList()
-
-            val movedProjectiles = mutableListOf<Projectile>()
-            for (p in combatState.projectiles) {
-                val nextPos = p.position + p.velocity
-                val rem = p.rangeRemaining - p.velocity.getDistance()
-
-                var hitObstacle = false
-                for (obs in combatState.obstacles) {
-                    if (nextPos.x >= obs.topLeft.x && nextPos.x <= obs.topLeft.x + obs.width &&
-                        nextPos.y >= obs.topLeft.y && nextPos.y <= obs.topLeft.y + obs.height
-                    ) {
-                        hitObstacle = true
-                        newEffects.add(
-                            Effect(
-                                position = nextPos,
-                                type = "Spark",
-                                ttl = 8,
-                                color = Color(0xFFFFD54F),
-                                size = 8f,
-                                velocity = Offset((-3..3).random().toFloat(), (-3..3).random().toFloat())
-                            )
-                        )
-                        break
-                    }
-                }
-
-                if (!hitObstacle && rem > 0 && nextPos.x < 1150f && nextPos.x > -50f && nextPos.y > 140f && nextPos.y < 880f) {
-                    movedProjectiles.add(p.copy(position = nextPos, rangeRemaining = rem))
-                }
-            }
-
-            // 5. Boss State Machine & Attack Execution
-            var playerDamageTaken = 0
-            var newShakeIntensity = combatState.screenShakeIntensity * 0.85f
-            val newShockwaves = combatState.shockwaves.map {
-                it.copy(
-                    radius = it.radius + (it.maxRadius - it.radius) * 0.25f,
-                    ttl = it.ttl - 1
-                )
-            }.filter { it.ttl > 0 }.toMutableList()
-
-            if (updatedBoss != null) {
-                var b = updatedBoss
-                if (b.isDying) {
-                    val dt = b.deathTimer - 1
-                    if (dt > 0) {
-                        updatedBoss = b.copy(deathTimer = dt)
-                    } else {
-                        // Boss permanently collapsed
-                        combatState.bloodDecals.toMutableList().add(
-                            BloodDecal(
-                                position = b.position,
-                                radius = 55f,
-                                color = Color(0xAA6A1B9A),
-                                alpha = 0.8f
-                            )
-                        )
-                        updatedBoss = null
-                    }
+                    gate.copy(distanceZ = relZ, isPassed = true)
                 } else {
-                    val bDiff = currentPlayer.position - b.position
-                    val bDist = bDiff.getDistance()
-                    val bDir = if (bDist > 0.1f) bDiff / bDist else Offset(-1f, 0f)
-                    val bFacing = atan2(bDir.y, bDir.x)
-
-                    var slamCd = (b.slamCooldown - 1).coerceAtLeast(0)
-                    var chargeCd = (b.chargeCooldown - 1).coerceAtLeast(0)
-                    var summonCd = (b.summonCooldown - 1).coerceAtLeast(0)
-                    var atkCd = (b.attackCooldown - 1).coerceAtLeast(0)
-                    var pTimer = b.patternTimer
-                    var pattern = b.currentPattern
-                    var bPos = b.position
-                    var chargeDir = b.chargeDirection
-                    var hasDamagedInCharge = b.hasDamagedInCharge
-                    var tProg = b.telegraphProgress
-
-                    when (pattern) {
-                        BossPattern.IDLE -> {
-                            // Steer toward player
-                            if (bDist > 55f) {
-                                bPos += bDir * b.speed
-                            }
-
-                            // Pattern Decision Tree
-                            if (summonCd <= 0 && currentZombies.count { !it.isDying } < 3) {
-                                pattern = BossPattern.TELEGRAPH_SUMMON
-                                pTimer = 26
-                                tProg = 0f
-                                SoundFx.playBossRoar(context)
-                            } else if (bDist in 45f..145f && slamCd <= 0) {
-                                pattern = BossPattern.TELEGRAPH_SLAM
-                                pTimer = 24
-                                tProg = 0f
-                            } else if (bDist > 160f && chargeCd <= 0) {
-                                pattern = BossPattern.TELEGRAPH_CHARGE
-                                pTimer = 28
-                                tProg = 0f
-                                chargeDir = bDir
-                            } else if (bDist <= 55f && atkCd <= 0) {
-                                // Basic melee punch
-                                playerDamageTaken += 16
-                                atkCd = 35
-                                GameSettings.triggerVibration(context, 45)
-                            }
-                        }
-                        BossPattern.TELEGRAPH_SLAM -> {
-                            pTimer--
-                            tProg = (24 - pTimer) / 24f
-                            if (pTimer <= 0) {
-                                pattern = BossPattern.EXECUTE_SLAM
-                                pTimer = 10
-                                SoundFx.playBossSlam(context)
-                                newShakeIntensity = 18f
-                                val slamCenter = bPos + bDir * 28f
-                                newShockwaves.add(
-                                    Shockwave(
-                                        position = slamCenter,
-                                        radius = 16f,
-                                        maxRadius = 110f,
-                                        ttl = 18,
-                                        color = Color(0xFFFF1744)
-                                    )
-                                )
-                                // Damage if player inside warning radius
-                                if ((currentPlayer.position - slamCenter).getDistance() <= 100f) {
-                                    playerDamageTaken += 32
-                                    GameSettings.triggerVibration(context, 80)
-                                }
-                                slamCd = 110
-                            }
-                        }
-                        BossPattern.EXECUTE_SLAM -> {
-                            pTimer--
-                            if (pTimer <= 0) pattern = BossPattern.IDLE
-                        }
-                        BossPattern.TELEGRAPH_CHARGE -> {
-                            pTimer--
-                            tProg = (28 - pTimer) / 28f
-                            if (pTimer <= 0) {
-                                pattern = BossPattern.EXECUTE_CHARGE
-                                pTimer = 22
-                                hasDamagedInCharge = false
-                                SoundFx.playBossRoar(context)
-                            }
-                        }
-                        BossPattern.EXECUTE_CHARGE -> {
-                            pTimer--
-                            bPos = Offset(
-                                (bPos.x + chargeDir.x * 9.5f).coerceIn(60f, 980f),
-                                (bPos.y + chargeDir.y * 9.5f).coerceIn(180f, 820f)
-                            )
-                            // Single hit damage safeguard
-                            if (!hasDamagedInCharge && (currentPlayer.position - bPos).getDistance() <= (b.size + 20f)) {
-                                playerDamageTaken += 36
-                                hasDamagedInCharge = true
-                                newShakeIntensity = 15f
-                                GameSettings.triggerVibration(context, 90)
-                            }
-                            if (pTimer <= 0) {
-                                pattern = BossPattern.IDLE
-                                chargeCd = 160
-                            }
-                        }
-                        BossPattern.TELEGRAPH_SUMMON -> {
-                            pTimer--
-                            tProg = (26 - pTimer) / 26f
-                            if (pTimer <= 0) {
-                                pattern = BossPattern.EXECUTE_SUMMON
-                                pTimer = 10
-                                // Spawn reinforcements
-                                val s1 = Zombie((0..99999).random(), Offset(1050f, 320f), 90, 90, "Runner", 4.7f, 12, 13f)
-                                val s2 = Zombie((0..99999).random(), Offset(1050f, 620f), 110, 110, "Walker", 2.3f, 12, 16f)
-                                currentZombies = currentZombies + listOf(s1, s2)
-                                summonCd = 240
-                            }
-                        }
-                        BossPattern.EXECUTE_SUMMON -> {
-                            pTimer--
-                            if (pTimer <= 0) pattern = BossPattern.IDLE
-                        }
-                    }
-
-                    val nextFlash = (b.hitFlash - 1).coerceAtLeast(0)
-                    updatedBoss = b.copy(
-                        position = bPos,
-                        facingAngle = bFacing,
-                        currentPattern = pattern,
-                        patternTimer = pTimer,
-                        telegraphProgress = tProg,
-                        slamCooldown = slamCd,
-                        chargeCooldown = chargeCd,
-                        summonCooldown = summonCd,
-                        attackCooldown = atkCd,
-                        chargeDirection = chargeDir,
-                        hasDamagedInCharge = hasDamagedInCharge,
-                        hitFlash = nextFlash
-                    )
+                    gate.copy(distanceZ = relZ)
                 }
             }
 
-            // 6. Update Regular Zombies (Movement, Attacks, Dying)
-            val updatedZombies = mutableListOf<Zombie>()
-            val newBloodDecals = combatState.bloodDecals.toMutableList()
-
-            for (z in currentZombies) {
-                if (z.isDying) {
-                    val nextDeathTimer = z.deathTimer - 1
-                    if (nextDeathTimer > 0) {
-                        updatedZombies.add(z.copy(deathTimer = nextDeathTimer))
+            // 4. Obstacle Collision
+            var screenShakeIntensity = state.screenShakeIntensity * 0.85f
+            val updatedObstacles = state.laneObstacles.map { obs ->
+                val relZ = obs.distanceZ - (newRunDist - state.player.runDistance)
+                if (!obs.isHit && relZ in -3f..2f && abs(newVisualX - obs.lane) < 0.6f) {
+                    SoundFx.playPlayerHurt(context)
+                    GameSettings.triggerVibration(context, 35)
+                    screenShakeIntensity = 12f
+                    if (newPlayer.squadCount > 1) {
+                        newPlayer = newPlayer.copy(squadCount = newPlayer.squadCount - 1)
                     } else {
-                        newBloodDecals.add(
-                            BloodDecal(
-                                position = z.position,
-                                radius = z.size * 1.3f,
-                                color = if (z.type == "Brute") Color(0x994A148C) else Color(0x998B0000),
-                                alpha = 0.65f,
-                                seed = (0..100).random()
-                            )
-                        )
+                        newPlayer = newPlayer.copy(health = maxOf(0, newPlayer.health - 15))
+                    }
+                    obs.copy(distanceZ = relZ, isHit = true)
+                } else {
+                    obs.copy(distanceZ = relZ)
+                }
+            }
+
+            // 5. Boss State Machine & Attacks
+            var updatedBoss = state.boss
+            val newShockwaves = state.laneShockwaves.map { it.copy(distanceZ = it.distanceZ - it.speedZ) }.toMutableList()
+
+            updatedBoss?.let { boss ->
+                var bHealth = boss.health
+                var bPattern = boss.currentPattern
+                var bTimer = boss.patternTimer + 1
+                var bSlamCd = maxOf(0, boss.slamCooldown - 1)
+                var bChargeCd = maxOf(0, boss.chargeCooldown - 1)
+                var bSummonCd = maxOf(0, boss.summonCooldown - 1)
+                var bHasDamagedInCharge = boss.hasDamagedInCharge
+                var bTelegraphLane = boss.telegraphLane
+                var bLaneX = boss.visualLaneX
+                var bDistZ = boss.distanceZ
+
+                when (bPattern) {
+                    BossPattern.IDLE -> {
+                        bHasDamagedInCharge = false
+                        bDistZ = 130f
+                        // Choose next attack pattern based on cooldowns
+                        if (bSlamCd == 0) {
+                            bPattern = BossPattern.TELEGRAPH_SLAM
+                            bTimer = 0
+                            bTelegraphLane = state.player.currentLane
+                            SoundFx.playBossRoar(context)
+                        } else if (bChargeCd == 0) {
+                            bPattern = BossPattern.TELEGRAPH_CHARGE
+                            bTimer = 0
+                            bTelegraphLane = state.player.currentLane
+                            SoundFx.playBossRoar(context)
+                        } else if (bSummonCd == 0) {
+                            bPattern = BossPattern.TELEGRAPH_SUMMON
+                            bTimer = 0
+                            SoundFx.playBossRoar(context)
+                        }
+                    }
+                    BossPattern.TELEGRAPH_SLAM -> {
+                        if (bTimer > 32) {
+                            bPattern = BossPattern.EXECUTE_SLAM
+                            bTimer = 0
+                            bSlamCd = 110
+                            SoundFx.playBossSlam(context)
+                            GameSettings.triggerVibration(context, 45)
+                            screenShakeIntensity = 18f
+                            newShockwaves.add(LaneShockwave(lane = bTelegraphLane, distanceZ = bDistZ))
+                        }
+                    }
+                    BossPattern.EXECUTE_SLAM -> {
+                        if (bTimer > 15) {
+                            bPattern = BossPattern.IDLE
+                            bTimer = 0
+                        }
+                    }
+                    BossPattern.TELEGRAPH_CHARGE -> {
+                        bLaneX += (bTelegraphLane - bLaneX) * 0.15f
+                        if (bTimer > 35) {
+                            bPattern = BossPattern.EXECUTE_CHARGE
+                            bTimer = 0
+                            bChargeCd = 160
+                            bHasDamagedInCharge = false
+                        }
+                    }
+                    BossPattern.EXECUTE_CHARGE -> {
+                        bDistZ -= 7.5f * state.zombieSpeedMult // Charge forward down the lane scaled by difficulty!
+                        if (!bHasDamagedInCharge && bDistZ <= 6f && abs(newVisualX - bTelegraphLane) < 0.65f) {
+                            SoundFx.playPlayerHurt(context)
+                            GameSettings.triggerVibration(context, 60)
+                            screenShakeIntensity = 22f
+                            bHasDamagedInCharge = true
+                            val bossChargeDamage = (35 * state.zombieDamageMult).toInt()
+                            if (newPlayer.squadCount > 2) {
+                                newPlayer = newPlayer.copy(squadCount = maxOf(1, newPlayer.squadCount - 2))
+                            } else {
+                                newPlayer = newPlayer.copy(health = maxOf(0, newPlayer.health - bossChargeDamage))
+                            }
+                        }
+                        if (bDistZ < -15f || bTimer > 40) {
+                            bPattern = BossPattern.IDLE
+                            bDistZ = 130f
+                            bTimer = 0
+                        }
+                    }
+                    BossPattern.TELEGRAPH_SUMMON -> {
+                        if (bTimer > 25) {
+                            bPattern = BossPattern.EXECUTE_SUMMON
+                            bTimer = 0
+                            bSummonCd = 200
+                        }
+                    }
+                    BossPattern.EXECUTE_SUMMON -> {
+                        bPattern = BossPattern.IDLE
+                        bTimer = 0
+                    }
+                }
+
+                updatedBoss = boss.copy(
+                    health = bHealth,
+                    currentPattern = bPattern,
+                    patternTimer = bTimer,
+                    slamCooldown = bSlamCd,
+                    chargeCooldown = bChargeCd,
+                    summonCooldown = bSummonCd,
+                    hasDamagedInCharge = bHasDamagedInCharge,
+                    telegraphLane = bTelegraphLane,
+                    visualLaneX = bLaneX,
+                    distanceZ = bDistZ,
+                    hitFlash = maxOf(0, boss.hitFlash - 1)
+                )
+            }
+
+            // Shockwave collision with player
+            newShockwaves.removeAll { wave ->
+                if (!wave.hasHitPlayer && wave.distanceZ in -4f..2f && abs(newVisualX - wave.lane) < 0.65f) {
+                    SoundFx.playPlayerHurt(context)
+                    GameSettings.triggerVibration(context, 40)
+                    screenShakeIntensity = 15f
+                    val shockwaveDamage = (25 * state.zombieDamageMult).toInt()
+                    if (newPlayer.squadCount > 1) {
+                        newPlayer = newPlayer.copy(squadCount = newPlayer.squadCount - 1)
+                    } else {
+                        newPlayer = newPlayer.copy(health = maxOf(0, newPlayer.health - shockwaveDamage))
+                    }
+                    wave.hasHitPlayer = true
+                    true
+                } else {
+                    wave.distanceZ < -15f
+                }
+            }
+
+            // 6. Zombie Spawning & Movement
+            val newZombies = state.zombies.toMutableList()
+
+            // Spawn additional zombies ahead
+            val activeZombiesCount = newZombies.count { it.distanceZ > 0f && !it.isDying }
+            if (activeZombiesCount < 8 && now - lastSpawnTime > 1400) {
+                lastSpawnTime = now
+                val zId = (1000..99999).random()
+                val lane = (0..2).random()
+                val isRunner = Random.nextFloat() < 0.35f
+                val isBrute = Random.nextFloat() < 0.15f
+                val type = if (isBrute) "Brute" else if (isRunner) "Runner" else "Walker"
+                val hp = if (isBrute) 220 else if (isRunner) 30 else 50
+                val spd = (if (isBrute) 0.8f else if (isRunner) 2.6f else 1.3f) * state.zombieSpeedMult
+                val dmg = ((if (isBrute) 20 else if (isRunner) 12 else 10) * state.zombieDamageMult).toInt()
+
+                newZombies.add(
+                    Zombie(
+                        id = zId,
+                        lane = lane,
+                        visualLaneX = lane.toFloat(),
+                        distanceZ = 300f + Random.nextFloat() * 50f,
+                        health = hp,
+                        maxHealth = hp,
+                        type = type,
+                        speed = spd,
+                        damage = dmg
+                    )
+                )
+            }
+
+            // Move zombies & check collision with player
+            val updatedZombies = mutableListOf<Zombie>()
+            for (z in newZombies) {
+                if (z.isDying) {
+                    val dt = z.deathTimer + 1
+                    if (dt < z.deathDuration) {
+                        updatedZombies.add(z.copy(deathTimer = dt))
                     }
                     continue
                 }
 
-                // Normal zombie behavior
-                val diff = currentPlayer.position - z.position
-                val dist = diff.getDistance()
-                val dir = if (dist > 0.1f) diff / dist else Offset(-1f, 0f)
-                val zFacing = atan2(dir.y, dir.x)
+                val newZDist = z.distanceZ - (state.player.runSpeed + z.speed) * 0.48f
+                val newZAnim = (z.animPhase + 0.12f) % 6.28f
 
-                val animSpeedMult = when (z.type) {
-                    "Runner" -> 0.32f
-                    "Brute" -> 0.12f
-                    else -> 0.20f
-                }
-                val nextAnimPhase = z.animPhase + animSpeedMult
-                val currentKnockback = z.knockback * 0.68f
-
-                var isLunging = z.isLunging
-                var lungeTimer = z.lungeTimer
-                var actualSpeed = z.speed
-
-                if (z.type == "Runner") {
-                    if (!isLunging && dist in 45f..95f && z.attackCooldown <= 5) {
-                        isLunging = true
-                        lungeTimer = 10
+                // Zombie hits the squad
+                if (newZDist in -4f..1.5f && abs(newVisualX - z.visualLaneX) < 0.65f) {
+                    SoundFx.playPlayerHurt(context)
+                    GameSettings.triggerVibration(context, 30)
+                    screenShakeIntensity = 10f
+                    if (newPlayer.squadCount > 1) {
+                        newPlayer = newPlayer.copy(squadCount = newPlayer.squadCount - 1)
+                    } else {
+                        newPlayer = newPlayer.copy(health = maxOf(0, newPlayer.health - z.damage))
                     }
-                    if (isLunging) {
-                        actualSpeed = z.speed * 1.8f
-                        lungeTimer--
-                        if (lungeTimer <= 0) isLunging = false
-                    }
-                }
-
-                val targetMovePos = if (dist > 36f) {
-                    z.position + dir * actualSpeed + currentKnockback
-                } else {
-                    z.position + currentKnockback
-                }
-
-                var isAttacking = z.isAttacking
-                var attackProg = z.attackProgress
-                var cd = z.attackCooldown
-
-                if (!isWaveBreak && dist <= 44f) {
-                    if (cd <= 0) {
-                        isAttacking = true
-                        attackProg = 0f
-                        cd = when (z.type) {
-                            "Runner" -> 22
-                            "Brute" -> 55
-                            else -> 36
-                        }
-                    }
-                }
-
-                if (isAttacking) {
-                    attackProg += when (z.type) {
-                        "Runner" -> 0.25f
-                        "Brute" -> 0.08f
-                        else -> 0.14f
-                    }
-                    if (attackProg >= 0.5f && attackProg - (if (z.type == "Brute") 0.08f else 0.14f) < 0.5f) {
-                        if (!isWaveBreak && dist <= 48f) {
-                            playerDamageTaken += z.damage
-                            if (z.type == "Brute") {
-                                newShakeIntensity = 12f
-                                newShockwaves.add(
-                                    Shockwave(
-                                        position = z.position,
-                                        radius = 12f,
-                                        maxRadius = 70f,
-                                        ttl = 15,
-                                        color = Color(0xCCFF5722)
-                                    )
-                                )
-                            }
-                        }
-                    }
-                    if (attackProg >= 1f) {
-                        isAttacking = false
-                        attackProg = 0f
-                    }
-                }
-
-                if (cd > 0) cd--
-                val nextFlash = (z.hitFlash - 1).coerceAtLeast(0)
-
-                updatedZombies.add(
-                    z.copy(
-                        position = targetMovePos,
-                        facingAngle = zFacing,
-                        animPhase = nextAnimPhase,
-                        knockback = currentKnockback,
-                        attackCooldown = cd,
-                        isAttacking = isAttacking,
-                        attackProgress = attackProg,
-                        isLunging = isLunging,
-                        lungeTimer = lungeTimer,
-                        hitFlash = nextFlash
+                    // Zombie dies on impact with squad
+                    updatedZombies.add(z.copy(isDying = true, deathTimer = 0, distanceZ = -5f))
+                } else if (newZDist > -15f) {
+                    updatedZombies.add(
+                        z.copy(
+                            distanceZ = newZDist,
+                            animPhase = newZAnim,
+                            hitFlash = maxOf(0, z.hitFlash - 1)
+                        )
                     )
-                )
+                }
             }
 
-            // 7. Bullet-Zombie & Bullet-Boss Collisions
-            val survivingProjectiles = movedProjectiles.toMutableList()
-            val newDamages = combatState.floatingDamages.map {
-                it.copy(
-                    ttl = it.ttl - 1,
-                    position = it.position + Offset(0f, -1.3f)
-                )
-            }.filter { it.ttl > 0 }.toMutableList()
+            // 7. Auto-Shooting targeting logic
+            val closestZombie = updatedZombies
+                .filter { it.distanceZ > 5f && !it.isDying }
+                .minByOrNull {
+                    // Prioritize zombies in player's current lane, then nearest distance
+                    val laneDiff = abs(it.visualLaneX - newPlayer.currentLane)
+                    it.distanceZ + laneDiff * 60f
+                }
 
-            val newHitMarkers = combatState.hitMarkers.map {
-                it.copy(ttl = it.ttl - 1)
-            }.filter { it.ttl > 0 }.toMutableList()
+            val hasTarget = (closestZombie != null && closestZombie.distanceZ < 260f) || (updatedBoss != null && updatedBoss!!.distanceZ < 240f)
+            if (hasTarget || isHoldingFire) {
+                fireWeapon()
+            }
 
-            var additionalKills = 0
-            var additionalHits = 0
-            val remainingZombies = updatedZombies.toMutableList()
+            // 8. Bullet flight and hit registration
+            val newDamages = state.floatingDamages.toMutableList()
+            var newKills = state.killCount
+            val remainingBullets = mutableListOf<LaneBullet>()
 
-            val projIterator = survivingProjectiles.iterator()
-            while (projIterator.hasNext()) {
-                val bullet = projIterator.next()
+            for (bullet in state.laneBullets) {
+                val newBulletDist = bullet.distanceZ + bullet.speedZ
                 var bulletConsumed = false
 
-                // 7A. Check Boss Collision
-                if (updatedBoss != null && !updatedBoss.isDying) {
-                    val bossDist = (updatedBoss.position - bullet.position).getDistance()
-                    if (bossDist < (updatedBoss.size + bullet.size + 4f)) {
+                // Check hit against boss
+                updatedBoss?.let { boss ->
+                    if (!bulletConsumed && abs(bullet.startLaneX - boss.visualLaneX) < 0.7f && abs(newBulletDist - boss.distanceZ) < 18f) {
                         bulletConsumed = true
-                        additionalHits++
-                        val newHp = updatedBoss.health - bullet.damage
+                        val newBossHp = maxOf(0, boss.health - bullet.damage)
+                        updatedBoss = boss.copy(health = newBossHp, hitFlash = 3)
                         SoundFx.playZombieHit(context)
-                        newHitMarkers.add(HitMarker(bullet.position, ttl = 5))
-
-                        newEffects.add(
-                            Effect(
-                                position = bullet.position,
-                                type = "BloodSpray",
-                                ttl = 8,
-                                color = Color(0xFF6A1B9A),
-                                size = 12f,
-                                velocity = bullet.velocity * 0.2f
+                        newDamages.add(
+                            FloatingDamage(
+                                text = "-${bullet.damage}",
+                                position = Offset(500f, 320f),
+                                isCritical = bullet.isCritical
                             )
                         )
+                        if (newBossHp <= 0) {
+                            SoundFx.playZombieDeath(context)
+                            newKills++
+                        }
+                    }
+                }
 
-                        if (showDamageNumbers) {
+                // Check hit against zombies
+                if (!bulletConsumed) {
+                    for (i in updatedZombies.indices) {
+                        val z = updatedZombies[i]
+                        if (!z.isDying && abs(bullet.startLaneX - z.visualLaneX) < 0.65f && abs(newBulletDist - z.distanceZ) < 16f) {
+                            bulletConsumed = true
+                            val newZHp = maxOf(0, z.health - bullet.damage)
+                            SoundFx.playZombieHit(context)
                             newDamages.add(
                                 FloatingDamage(
-                                    text = if (bullet.isCritical) "CRIT -${bullet.damage}!" else "-${bullet.damage}",
-                                    position = updatedBoss.position + Offset((-15..15).random().toFloat(), -32f),
-                                    color = if (bullet.isCritical) Color(0xFFFF1744) else Color(0xFFFFEE58),
-                                    ttl = 24,
+                                    text = "-${bullet.damage}",
+                                    position = Offset(400f + z.visualLaneX * 100f, 400f),
                                     isCritical = bullet.isCritical
                                 )
                             )
-                        }
-
-                        if (newHp <= 0) {
-                            additionalKills++
-                            SoundFx.playZombieDeath(context)
-                            updatedBoss = updatedBoss.copy(
-                                health = 0,
-                                isDying = true,
-                                deathTimer = 45,
-                                hitFlash = 8
-                            )
-                        } else {
-                            updatedBoss = updatedBoss.copy(
-                                health = newHp,
-                                hitFlash = 5
-                            )
-                        }
-                    }
-                }
-
-                // 7B. Check Regular Zombie Collisions
-                if (!bulletConsumed) {
-                    val zombieIterator = remainingZombies.iterator()
-                    while (zombieIterator.hasNext()) {
-                        val zombie = zombieIterator.next()
-                        if (zombie.isDying) continue
-
-                        val hitDist = (zombie.position - bullet.position).getDistance()
-                        if (hitDist < (zombie.size + bullet.size + 4f)) {
-                            bulletConsumed = true
-                            additionalHits++
-                            val newHp = zombie.health - bullet.damage
-
-                            SoundFx.playZombieHit(context)
-                            newHitMarkers.add(HitMarker(bullet.position, ttl = 5))
-
-                            newEffects.add(
-                                Effect(
-                                    position = bullet.position,
-                                    type = "BloodSpray",
-                                    ttl = 8,
-                                    color = Color(0xFFD32F2F),
-                                    size = 10f,
-                                    velocity = bullet.velocity * 0.25f
-                                )
-                            )
-
-                            if (showDamageNumbers) {
-                                newDamages.add(
-                                    FloatingDamage(
-                                        text = if (bullet.isCritical) "CRIT -${bullet.damage}!" else "-${bullet.damage}",
-                                        position = zombie.position + Offset((-10..10).random().toFloat(), -18f),
-                                        color = if (bullet.isCritical) Color(0xFFFF1744) else Color(0xFFFFEE58),
-                                        ttl = 24,
-                                        isCritical = bullet.isCritical
-                                    )
-                                )
-                            }
-
-                            val bulletDir = if (bullet.velocity.getDistance() > 0.01f) bullet.velocity / bullet.velocity.getDistance() else Offset(1f, 0f)
-                            val knockbackPower = when (weaponDef.id) {
-                                3 -> 16f
-                                4 -> 20f
-                                else -> 8f
-                            }
-                            val resistance = if (zombie.type == "Brute") 0.25f else 1.0f
-                            val actualKnockback = bulletDir * (knockbackPower * resistance)
-
-                            if (newHp <= 0) {
-                                additionalKills++
+                            if (newZHp <= 0) {
                                 SoundFx.playZombieDeath(context)
-                                val idx = remainingZombies.indexOf(zombie)
-                                if (idx != -1) {
-                                    remainingZombies[idx] = zombie.copy(
-                                        health = 0,
-                                        isDying = true,
-                                        deathTimer = 16,
-                                        hitFlash = 6,
-                                        knockback = actualKnockback * 1.5f
-                                    )
-                                }
+                                updatedZombies[i] = z.copy(health = 0, isDying = true, deathTimer = 0)
+                                newKills++
                             } else {
-                                val idx = remainingZombies.indexOf(zombie)
-                                if (idx != -1) {
-                                    remainingZombies[idx] = zombie.copy(
-                                        health = newHp,
-                                        hitFlash = 5,
-                                        knockback = actualKnockback
-                                    )
-                                }
+                                updatedZombies[i] = z.copy(health = newZHp, hitFlash = 3)
                             }
                             break
                         }
                     }
                 }
 
-                if (bulletConsumed) {
-                    projIterator.remove()
+                if (!bulletConsumed && newBulletDist < bullet.targetDistanceZ) {
+                    remainingBullets.add(bullet.copy(distanceZ = newBulletDist))
                 }
             }
 
-            // 8. Combo Streaks
-            var comboStreak = combatState.comboStreak
-            var comboBanner = combatState.comboBanner?.let {
-                if (it.ttl - 1 > 0) it.copy(ttl = it.ttl - 1) else null
+            // Update floating damages
+            val survivingDamages = newDamages.mapNotNull {
+                if (it.ttl > 1) it.copy(ttl = it.ttl - 1, position = Offset(it.position.x, it.position.y - 2f)) else null
             }
 
-            if (additionalKills > 0) {
-                val timeSinceLastKill = now - combatState.lastKillTimeMs
-                if (timeSinceLastKill < 2800L) {
-                    comboStreak += additionalKills
-                } else {
-                    comboStreak = additionalKills
-                }
+            // 9. Wave Progression (Survival Mode)
+            var curWave = state.currentWave
+            var waveNotice = state.waveAnnouncement
+            var waveNoticeTtl = maxOf(0, state.waveAnnouncementTtl - 1)
+            var wavesCleared = state.wavesClearedInRun
 
-                if (comboStreak >= 2) {
-                    val (title, color) = when (comboStreak) {
-                        2 -> Pair("DOUBLE KILL!", Color(0xFF4CAF50))
-                        3 -> Pair("TRIPLE KILL!", Color(0xFF00E5FF))
-                        4 -> Pair("RAMPAGE!", Color(0xFFFF9100))
-                        else -> Pair("MASSACRE!", Color(0xFFE040FB))
-                    }
-                    comboBanner = ComboBanner(
-                        title = title,
-                        subtitle = "$comboStreak KILLS IN A ROW",
-                        color = color,
-                        ttl = 45
-                    )
-                    SoundFx.playCombo(context)
-                    GameSettings.triggerVibration(context, 35)
-                }
-            }
-
-            // 9. Player Damage Feedback
-            val newPlayerHealth = (currentPlayer.health - playerDamageTaken).coerceAtLeast(0)
-            if (playerDamageTaken > 0) {
-                SoundFx.playPlayerHurt(context)
-                GameSettings.triggerVibration(context, 70)
-                newShakeIntensity = (newShakeIntensity + 8f).coerceAtMost(18f)
-                newEffects.add(
-                    Effect(
-                        position = currentPlayer.position,
-                        type = "PlayerHit",
-                        ttl = 7,
-                        color = Color(0x66FF0000),
-                        size = 55f
-                    )
-                )
-            }
-
-            // 10. Screen Shake Offset
-            val screenShakeOffset = if (newShakeIntensity > 0.5f) {
-                val rx = (Random.nextFloat() * 2f - 1f) * newShakeIntensity * 0.7f
-                val ry = (Random.nextFloat() * 2f - 1f) * newShakeIntensity * 0.7f
-                Offset(rx, ry)
-            } else Offset.Zero
-
-            // 11. Shell Casings Update
-            val newShells = combatState.shellCasings.map {
-                it.copy(
-                    position = it.position + it.velocity,
-                    velocity = it.velocity * 0.88f,
-                    rotation = it.rotation + 18f,
-                    ttl = it.ttl - 1
-                )
-            }.filter { it.ttl > 0 }
-
-            // 12. Check Objectives, Waves, and Victories
-            val totalKills = combatState.killCount + additionalKills
-            val totalShotsHit = combatState.totalShotsHit + additionalHits
-            var wavesClearedInRun = combatState.wavesClearedInRun
-            var isVictoryNow = false
-            var isGameOverNow = (newPlayerHealth <= 0)
-
-            if (isSurvivalMode) {
-                val aliveCount = remainingZombies.count { !it.isDying } + (if (updatedBoss != null && !updatedBoss.isDying) 1 else 0)
-                if (waveEnemiesSpawned >= waveEnemiesTotal && aliveCount == 0 && !isWaveBreak) {
-                    if (currentWave < 5) {
-                        // Start wave break
-                        isWaveBreak = true
-                        waveBreakTimer = 180 // 3 seconds
-                        wavesClearedInRun = currentWave
-                        waveAnnouncement = "WAVE $currentWave COMPLETED! RECOVERING..."
-                        waveAnnouncementTtl = 65
+            if (state.isSurvivalMode) {
+                val waveTotal = getWaveTotalEnemies(curWave)
+                if (newKills >= waveTotal * curWave) {
+                    if (curWave < state.maxWaves) {
+                        curWave++
+                        wavesCleared = curWave - 1
+                        waveNotice = "WAVE $curWave // SURVIVE THE HIGHWAY"
+                        waveNoticeTtl = 60
                         SoundFx.playCombo(context)
-                        // Health recovery bonus
-                        currentPlayer = currentPlayer.copy(
-                            health = (currentPlayer.health + 15).coerceAtMost(currentPlayer.maxHealth)
+                        // Supply Drop Heal between waves
+                        newPlayer = newPlayer.copy(
+                            health = minOf(newPlayer.maxHealth, newPlayer.health + 30),
+                            ammoCurrent = newPlayer.ammoMax
                         )
-                    } else if (currentWave == 5) {
-                        // Defeated Wave 5 Boss!
-                        wavesClearedInRun = 5
-                        isVictoryNow = true
                     }
                 }
-            } else if (isBossMission) {
-                // Boss Mission victory condition: The Abomination is dead
-                if (updatedBoss != null && updatedBoss.isDying) {
-                    isVictoryNow = true
-                }
-            } else {
-                // Regular Mission Objective & Extraction
-                val extractionActive = totalKills >= combatState.targetKills
-                val playerInExtraction = extractionActive &&
-                        currentPlayer.position.x >= 880f &&
-                        currentPlayer.position.y in 200f..780f
-                isVictoryNow = playerInExtraction && newPlayerHealth > 0
             }
 
-            // Award Rewards on Game End
-            var earnedCoins = combatState.survivalCoinsEarned
-            var earnedFood = combatState.survivalFoodEarned
+            // 10. Victory and Game Over Evaluation
+            val isGameOver = (newPlayer.health <= 0)
+            val isBossDead = (updatedBoss != null && updatedBoss!!.health <= 0)
+            val isCampaignDistanceReached = (!state.isSurvivalMode && newPlayer.runDistance >= newPlayer.targetDistance)
+            val isSurvivalWavesComplete = (state.isSurvivalMode && curWave >= 5 && (updatedBoss == null || updatedBoss!!.health <= 0) && newKills >= 60)
 
-            if (isVictoryNow && !combatState.isVictory) {
-                GameSettings.triggerVibration(context, 100)
-                if (isSurvivalMode) {
-                    viewModel.claimSurvivalRewards(5, totalKills.toLong()) { c, f ->
-                        earnedCoins = c
-                        earnedFood = f
-                    }
+            val isVictory = if (isGameOver) false
+            else if (isBossMission) isBossDead
+            else if (state.isSurvivalMode) isSurvivalWavesComplete
+            else isCampaignDistanceReached
+
+            // Persist mission completion and survival records atomically
+            if (isVictory && !state.isVictory) {
+                if (state.isSurvivalMode) {
+                    viewModel.claimSurvivalRewards(curWave, newKills.toLong())
                 } else {
-                    viewModel.completeMission(missionId, totalKills.toLong())
+                    viewModel.completeMission(missionId, newKills.toLong())
+                }
+                // Persist bonus supplies collected from tactical gates
+                if (newPlayer.bonusCoinsEarned > 0 || newPlayer.bonusMetalEarned > 0) {
+                    viewModel.addSupplies(newPlayer.bonusCoinsEarned, newPlayer.bonusMetalEarned)
                 }
             }
 
-            if (isGameOverNow && !combatState.isGameOver) {
-                GameSettings.triggerVibration(context, 140)
-                if (isSurvivalMode && wavesClearedInRun > 0) {
-                    viewModel.claimSurvivalRewards(wavesClearedInRun, totalKills.toLong()) { c, f ->
-                        earnedCoins = c
-                        earnedFood = f
-                    }
-                }
-            }
-
-            val extractionActive = if (!isSurvivalMode && !isBossMission) totalKills >= combatState.targetKills else false
-
-            combatState = combatState.copy(
-                player = currentPlayer.copy(health = newPlayerHealth),
-                zombies = remainingZombies,
+            combatState = state.copy(
+                player = newPlayer,
+                tacticalGates = updatedGates,
+                laneObstacles = updatedObstacles,
+                laneShockwaves = newShockwaves,
                 boss = updatedBoss,
-                projectiles = survivingProjectiles,
-                effects = newEffects,
-                floatingDamages = newDamages,
-                bloodDecals = newBloodDecals.takeLast(25),
-                shellCasings = newShells,
-                hitMarkers = newHitMarkers,
-                shockwaves = newShockwaves,
-                comboBanner = comboBanner,
-                comboStreak = comboStreak,
-                lastKillTimeMs = if (additionalKills > 0) now else combatState.lastKillTimeMs,
-                screenShake = screenShakeOffset,
-                screenShakeIntensity = newShakeIntensity,
-                killCount = totalKills,
-                totalShotsHit = totalShotsHit,
-                currentWave = currentWave,
-                waveEnemiesTotal = waveEnemiesTotal,
-                waveEnemiesSpawned = waveEnemiesSpawned,
-                isWaveBreak = isWaveBreak,
-                waveBreakTimer = waveBreakTimer,
-                waveAnnouncement = waveAnnouncement,
-                waveAnnouncementTtl = waveAnnouncementTtl,
-                wavesClearedInRun = wavesClearedInRun,
-                survivalCoinsEarned = earnedCoins,
-                survivalFoodEarned = earnedFood,
-                extractionActive = extractionActive,
-                isVictory = isVictoryNow,
-                isGameOver = isGameOverNow
+                zombies = updatedZombies,
+                laneBullets = remainingBullets,
+                floatingDamages = survivingDamages,
+                killCount = newKills,
+                currentWave = curWave,
+                wavesClearedInRun = wavesCleared,
+                waveAnnouncement = if (waveNoticeTtl > 0) waveNotice else null,
+                waveAnnouncementTtl = waveNoticeTtl,
+                screenShakeIntensity = screenShakeIntensity,
+                comboBanner = banner,
+                isGameOver = isGameOver,
+                isVictory = isVictory
             )
+
+            delay(16) // ~60 FPS update rate
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0C0E11))) {
-        // Main Battle Canvas
+    // Root UI Container
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0F1215))
+    ) {
+        // Main 3D Perspective Canvas with Touch Swipe Controls
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(Unit) {
+                .pointerInput(sessionKey) {
+                    var totalDragX = 0f
                     detectDragGestures(
-                        onDrag = { _, dragAmount ->
-                            combatState = combatState.copy(joystickInput = dragAmount / 12f)
-                        },
+                        onDragStart = { totalDragX = 0f },
                         onDragEnd = {
-                            combatState = combatState.copy(joystickInput = Offset.Zero)
+                            if (totalDragX < -40f) {
+                                switchLaneLeft()
+                            } else if (totalDragX > 40f) {
+                                switchLaneRight()
+                            }
+                            totalDragX = 0f
+                        },
+                        onDrag = { _, dragAmount ->
+                            totalDragX += dragAmount.x
                         }
                     )
                 }
         ) {
-            withTransform({
-                translate(combatState.screenShake.x, combatState.screenShake.y)
-            }) {
-                // 1. Draw Battlefield
-                drawBattlefield(missionId, size)
-
-                // 2. Draw Blood Decals
-                combatState.bloodDecals.forEach { b ->
-                    drawCircle(
-                        color = b.color.copy(alpha = b.alpha),
-                        radius = b.radius,
-                        center = b.position
-                    )
-                    drawCircle(
-                        color = b.color.copy(alpha = b.alpha * 0.8f),
-                        radius = b.radius * 0.35f,
-                        center = b.position + Offset(b.radius * 0.8f, b.radius * 0.4f)
-                    )
-                }
-
-                // 3. Draw Shell Casings
-                combatState.shellCasings.forEach { s ->
-                    rotate(s.rotation, s.position) {
-                        drawRect(
-                            color = Color(0xFFFFD54F),
-                            topLeft = s.position - Offset(4f, 1.5f),
-                            size = Size(8f, 3f)
-                        )
-                    }
-                }
-
-                // 4. Draw Obstacles
-                combatState.obstacles.forEach { obs ->
-                    drawRect(
-                        color = Color(0x66000000),
-                        topLeft = obs.topLeft + Offset(6f, 6f),
-                        size = Size(obs.width, obs.height)
-                    )
-                    drawRect(
-                        color = Color(0xFF2B343D),
-                        topLeft = obs.topLeft,
-                        size = Size(obs.width, obs.height)
-                    )
-                    drawRect(
-                        color = Color(0xFF455A64),
-                        topLeft = obs.topLeft,
-                        size = Size(obs.width, obs.height),
-                        style = Stroke(width = 2.5f)
-                    )
-                    drawLine(
-                        color = Color(0xFFFFB300),
-                        start = obs.topLeft + Offset(8f, 8f),
-                        end = obs.topLeft + Offset(obs.width - 8f, obs.height - 8f),
-                        strokeWidth = 2f
-                    )
-                }
-
-                // 5. Draw Extraction Zone (Campaign missions only)
-                if (combatState.extractionActive) {
-                    val extractionRect = Size(110f, 580f)
-                    val extractionTopLeft = Offset(880f, 200f)
-
-                    drawRect(
-                        color = Color(0x334CAF50),
-                        topLeft = extractionTopLeft,
-                        size = extractionRect
-                    )
-                    drawRect(
-                        color = Color(0xFF4CAF50),
-                        topLeft = extractionTopLeft,
-                        size = extractionRect,
-                        style = Stroke(width = 3f)
-                    )
-                    drawCircle(
-                        color = Color(0xFF81C784),
-                        radius = 28f,
-                        center = Offset(935f, 490f)
-                    )
-                }
-
-                // 6. Draw Boss Telegraph Warning Indicators
-                combatState.boss?.let { b ->
-                    if (!b.isDying) {
-                        when (b.currentPattern) {
-                            BossPattern.TELEGRAPH_SLAM -> {
-                                // Red pulsing circular danger zone
-                                val slamTarget = b.position + Offset(cos(b.facingAngle) * 30f, sin(b.facingAngle) * 30f)
-                                drawCircle(
-                                    color = Color(0x44FF1744),
-                                    radius = 100f * b.telegraphProgress,
-                                    center = slamTarget
-                                )
-                                drawCircle(
-                                    color = Color(0xFFFF1744),
-                                    radius = 100f,
-                                    center = slamTarget,
-                                    style = Stroke(width = 3f)
-                                )
-                            }
-                            BossPattern.TELEGRAPH_CHARGE -> {
-                                // Directional danger lane
-                                val laneLength = 380f * b.telegraphProgress
-                                val start = b.position
-                                val end = b.position + b.chargeDirection * laneLength
-                                drawLine(
-                                    color = Color(0x88FF1744),
-                                    start = start,
-                                    end = end,
-                                    strokeWidth = 50f
-                                )
-                                drawLine(
-                                    color = Color(0xFFFF5252),
-                                    start = start,
-                                    end = end,
-                                    strokeWidth = 4f
-                                )
-                            }
-                            BossPattern.TELEGRAPH_SUMMON -> {
-                                // Toxic summon aura
-                                drawCircle(
-                                    color = Color(0x3300E676),
-                                    radius = 90f * b.telegraphProgress,
-                                    center = b.position
-                                )
-                                drawCircle(
-                                    color = Color(0xFF00E676),
-                                    radius = 90f,
-                                    center = b.position,
-                                    style = Stroke(width = 2.5f)
-                                )
-                            }
-                            else -> {}
-                        }
-                    }
-                }
-
-                // 7. Draw Shockwaves
-                combatState.shockwaves.forEach { sw ->
-                    val alpha = (sw.ttl / 18f).coerceIn(0f, 1f)
-                    drawCircle(
-                        color = sw.color.copy(alpha = alpha),
-                        radius = sw.radius,
-                        center = sw.position,
-                        style = Stroke(width = 5f)
-                    )
-                }
-
-                // 8. Draw Regular Zombies
-                combatState.zombies.forEach { z ->
-                    drawZombieCharacter(z)
-                }
-
-                // 9. Draw The Abomination Boss
-                combatState.boss?.let { b ->
-                    drawBossCharacter(b)
-                }
-
-                // 10. Draw Projectiles with Luminous Bullet Trails
-                combatState.projectiles.forEach { p ->
-                    val trailLength = 0.75f
-                    val trailStart = p.position - p.velocity * trailLength
-                    drawLine(
-                        color = p.color.copy(alpha = 0.45f),
-                        start = trailStart,
-                        end = p.position,
-                        strokeWidth = p.size * 1.2f
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        radius = p.size * 0.65f,
-                        center = p.position
-                    )
-                    drawCircle(
-                        color = p.color,
-                        radius = p.size,
-                        center = p.position
-                    )
-                }
-
-                // 11. Draw Player Character
-                drawPlayerCharacter(combatState.player, weaponDef)
-
-                // 12. Draw Visual Effects
-                combatState.effects.forEach { eff ->
-                    when (eff.type) {
-                        "Flash" -> {
-                            drawCircle(eff.color, radius = eff.size, center = eff.position)
-                            drawCircle(Color.White, radius = eff.size * 0.4f, center = eff.position)
-                        }
-                        "BloodSpray" -> {
-                            val alpha = (eff.ttl / 8f).coerceIn(0f, 1f)
-                            drawCircle(eff.color.copy(alpha = alpha), radius = eff.size, center = eff.position)
-                        }
-                        "Spark" -> {
-                            val alpha = (eff.ttl / 8f).coerceIn(0f, 1f)
-                            drawCircle(eff.color.copy(alpha = alpha), radius = eff.size * 0.7f, center = eff.position)
-                        }
-                        "PlayerHit" -> {
-                            drawCircle(eff.color, radius = eff.size, center = eff.position)
-                        }
-                    }
-                }
-
-                // 13. Draw Hit Markers
-                combatState.hitMarkers.forEach { hm ->
-                    val markerSize = 6f
-                    drawLine(
-                        color = Color.White,
-                        start = hm.position - Offset(markerSize, markerSize),
-                        end = hm.position + Offset(markerSize, markerSize),
-                        strokeWidth = 2f
-                    )
-                    drawLine(
-                        color = Color.White,
-                        start = hm.position - Offset(-markerSize, markerSize),
-                        end = hm.position + Offset(-markerSize, markerSize),
-                        strokeWidth = 2f
-                    )
-                }
-
-                // 14. Draw Floating Damage Numbers
-                if (showDamageNumbers) {
-                    combatState.floatingDamages.forEach { dmg ->
-                        val paint = android.graphics.Paint().apply {
-                            color = if (dmg.isCritical) android.graphics.Color.RED else android.graphics.Color.YELLOW
-                            textSize = if (dmg.isCritical) 32f else 26f
-                            isFakeBoldText = true
-                            alpha = (dmg.ttl * 10).coerceIn(0, 255)
-                        }
-                        drawContext.canvas.nativeCanvas.drawText(
-                            dmg.text,
-                            dmg.position.x,
-                            dmg.position.y,
-                            paint
-                        )
-                    }
-                }
-            }
-        }
-
-        // Low Health Vignette Overlay
-        if (combatState.player.health < 35 && !combatState.isGameOver) {
-            val pulse = (sin(System.currentTimeMillis() / 150.0) * 0.15 + 0.25).toFloat()
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .border(16.dp, Color.Red.copy(alpha = pulse))
+            LaneRenderer.renderScene(
+                drawScope = this,
+                state = combatState,
+                width = size.width,
+                height = size.height
             )
         }
 
-        // Inter-Wave / Combo Banner Announcements
-        combatState.waveAnnouncement?.let { announcement ->
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 115.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Surface(
-                    color = Color(0xEE12161B),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.border(2.dp, Color(0xFFFFB300), RoundedCornerShape(8.dp))
-                ) {
-                    Text(
-                        text = announcement,
-                        color = Color(0xFFFFB300),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.5.sp,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
-                }
-            }
-        }
-
-        combatState.comboBanner?.let { banner ->
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 160.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Surface(
-                    color = Color(0xEE12161B),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.border(2.dp, banner.color, RoundedCornerShape(8.dp))
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = banner.title,
-                            color = banner.color,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 2.sp
-                        )
-                        Text(
-                            text = banner.subtitle,
-                            color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-        }
-
-        // PROFESSIONAL COMBAT TOP HUD
+        // TOP TACTICAL HUD
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp)
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
-            // Top Status Bar
-            Surface(
-                color = Color(0xEE11151A),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Color(0xFF28323D), RoundedCornerShape(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(
-                                color = if (isSurvivalMode) Color(0xFF4A148C) else Color(0xFF1B3B2B),
-                                shape = RoundedCornerShape(4.dp)
-                            ) {
-                                Text(
-                                    text = if (isSurvivalMode) "SURVIVAL MODE" else "OPERATION 0$missionId",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSurvivalMode) Color(0xFFE040FB) else Color(0xFF81C784),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = missionTitle.uppercase(),
-                                fontWeight = FontWeight.Black,
-                                fontSize = 13.sp,
-                                color = Color.White
-                            )
-                        }
-
-                        Spacer(Modifier.height(4.dp))
-
-                        // Wave / Objective info
-                        if (isSurvivalMode) {
-                            val alive = combatState.zombies.count { !it.isDying } + (if (combatState.boss != null && !combatState.boss!!.isDying) 1 else 0)
-                            val remaining = (combatState.waveEnemiesTotal - combatState.waveEnemiesSpawned + alive).coerceAtLeast(0)
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "WAVE ${combatState.currentWave} / ${combatState.maxWaves}",
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 12.sp,
-                                    color = Color(0xFFFFB300)
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Text(
-                                    text = if (combatState.isWaveBreak) "RECOVERING..." else "ENEMIES: $remaining LEFT",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (combatState.isWaveBreak) Color(0xFF81C784) else Color(0xFF4DD0E1)
-                                )
-                            }
-                        } else if (isBossMission) {
-                            Text(
-                                text = "OBJECTIVE: DESTROY THE ABOMINATION",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                color = Color(0xFFEF5350)
-                            )
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "KILLS: ${combatState.killCount}/${combatState.targetKills}",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF4DD0E1)
-                                )
-                                if (combatState.extractionActive) {
-                                    Spacer(Modifier.width(10.dp))
-                                    Text(
-                                        text = "EXTRACTION OPEN ➔",
-                                        color = Color(0xFF81C784),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Black
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Tactical Pause Button
-                    IconButton(
-                        onClick = { combatState = combatState.copy(isPaused = !combatState.isPaused) }
-                    ) {
-                        Icon(
-                            imageVector = if (combatState.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                            contentDescription = "Pause",
-                            tint = Color.White
+                // Left: Player Health & Squad Size
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "HP: ${combatState.player.health}/${combatState.player.maxHealth}",
+                            color = if (combatState.player.health > 40) Color(0xFF00E676) else Color(0xFFFF1744),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black
                         )
-                    }
-                }
-            }
-
-            // DEDICATED BOSS HEALTH BAR (When Boss is Active)
-            combatState.boss?.let { b ->
-                if (!b.isDying) {
-                    Spacer(Modifier.height(6.dp))
-                    Surface(
-                        color = Color(0xEE1A121E),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.5.dp, Color(0xFFAB47BC), RoundedCornerShape(8.dp))
-                    ) {
-                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("⚠️", fontSize = 13.sp)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        text = b.name,
-                                        color = Color(0xFFE040FB),
-                                        fontWeight = FontWeight.Black,
-                                        fontSize = 12.sp,
-                                        letterSpacing = 1.sp
-                                    )
-                                }
-
-                                val patternLabel = when (b.currentPattern) {
-                                    BossPattern.TELEGRAPH_SLAM -> "⚠️ PREPARING SLAM"
-                                    BossPattern.EXECUTE_SLAM -> "💥 SLAM IMPACT!"
-                                    BossPattern.TELEGRAPH_CHARGE -> "⚡ CHARGE WINDUP"
-                                    BossPattern.EXECUTE_CHARGE -> "🏃 CHARGING!"
-                                    BossPattern.TELEGRAPH_SUMMON -> "📢 CALLING HORDE"
-                                    else -> "MUTANT ALPHA"
-                                }
-
-                                Surface(
-                                    color = Color(0xFF38153F),
-                                    shape = RoundedCornerShape(4.dp)
-                                ) {
-                                    Text(
-                                        text = patternLabel,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFFFD54F),
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-
-                            Spacer(Modifier.height(4.dp))
-
-                            // Boss Bar
-                            val bossHpRatio = (b.health.toFloat() / b.maxHealth).coerceIn(0f, 1f)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(10.dp)
-                                    .background(Color(0xFF261D2B), RoundedCornerShape(5.dp))
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .fillMaxWidth(bossHpRatio)
-                                        .background(
-                                            if (bossHpRatio > 0.4f) Color(0xFFAB47BC) else Color(0xFFE53935),
-                                            RoundedCornerShape(5.dp)
-                                        )
-                                )
-                            }
-
-                            Spacer(Modifier.height(3.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "${b.health} / ${b.maxHealth} HP",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                                Text(
-                                    text = "${(bossHpRatio * 100).toInt()}%",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFCE93D8)
-                                )
-                            }
+                        Spacer(Modifier.width(8.dp))
+                        // Squad Size Badge
+                        Surface(
+                            color = Color(0xDD0288D1),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "👥 SQUAD: ${combatState.player.squadCount}",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
                         }
                     }
-                }
-            }
-        }
 
-        // BOTTOM TACTICAL CONTROLS & HUD
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom
-        ) {
-            // Left: Virtual Joystick
-            Box(
-                modifier = Modifier
-                    .size(110.dp)
-                    .background(Color(0x33263238), CircleShape)
-                    .border(2.dp, Color(0x6678909C), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                val thumbOffset = combatState.joystickInput * 30f
-                Box(
-                    modifier = Modifier
-                        .offset(x = thumbOffset.x.dp, y = thumbOffset.y.dp)
-                        .size(46.dp)
-                        .background(Color(0xAA4CAF50), CircleShape)
-                        .border(1.5.dp, Color.White, CircleShape)
-                )
-                Text("MOVE", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0x88FFFFFF))
-            }
-
-            // Center: Compact Player Health HUD
-            Surface(
-                color = Color(0xDD11161B),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .padding(bottom = 6.dp)
-                    .border(1.dp, Color(0xFF28343E), RoundedCornerShape(8.dp))
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    val hpRatio = (combatState.player.health.toFloat() / combatState.player.maxHealth).coerceIn(0f, 1f)
-                    Text(
-                        text = "HP: ${combatState.player.health} / ${combatState.player.maxHealth}",
-                        fontWeight = FontWeight.Black,
-                        fontSize = 11.sp,
-                        color = if (hpRatio > 0.35f) Color(0xFF81C784) else Color(0xFFFF5252)
-                    )
-                    Spacer(Modifier.height(3.dp))
+                    Spacer(Modifier.height(4.dp))
+                    // Health bar
                     Box(
                         modifier = Modifier
-                            .width(84.dp)
+                            .width(140.dp)
                             .height(6.dp)
                             .background(Color(0xFF263238), RoundedCornerShape(3.dp))
                     ) {
+                        val hpRatio = (combatState.player.health.toFloat() / combatState.player.maxHealth).coerceIn(0f, 1f)
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
                                 .fillMaxWidth(hpRatio)
                                 .background(
-                                    if (hpRatio > 0.35f) Color(0xFF4CAF50) else Color(0xFFE53935),
+                                    if (hpRatio > 0.4f) Color(0xFF00E676) else Color(0xFFFF1744),
                                     RoundedCornerShape(3.dp)
                                 )
                         )
                     }
                 }
-            }
 
-            // Right: Weapon & Ammunition Armory Controls
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                // Tactical Reload Button
+                // Center: Distance to Extraction or Survival Wave
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    IconButton(
-                        onClick = { triggerReload() },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .background(Color(0xDD263238), CircleShape)
-                            .border(1.5.dp, Color(0xFF78909C), CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Reload",
-                            tint = if (combatState.player.isReloading) Color(0xFFFFB300) else Color.White,
-                            modifier = Modifier.size(24.dp)
+                    if (combatState.isSurvivalMode) {
+                        Text(
+                            text = "WAVE ${combatState.currentWave} / ${combatState.maxWaves}",
+                            color = Color(0xFFE040FB),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black
                         )
+                        Text(
+                            text = "💀 KILLS: ${combatState.killCount}",
+                            color = Color(0xFFB0BEC5),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        val distMeters = combatState.player.runDistance.toInt()
+                        val targetMeters = combatState.player.targetDistance.toInt()
+                        Text(
+                            text = "EXTRACTION: $distMeters / ${targetMeters}m",
+                            color = Color(0xFFFFB300),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        // Progress bar
+                        val distRatio = (combatState.player.runDistance / combatState.player.targetDistance).coerceIn(0f, 1f)
+                        Box(
+                            modifier = Modifier
+                                .width(120.dp)
+                                .height(5.dp)
+                                .background(Color(0xFF263238), RoundedCornerShape(2.5.dp))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(distRatio)
+                                    .background(Color(0xFFFFB300), RoundedCornerShape(2.5.dp))
+                            )
+                        }
                     }
-                    Spacer(Modifier.height(3.dp))
-                    Text("RELOAD", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB0BEC5))
                 }
 
-                // Fire Button & Ammo Status
-                Column(horizontalAlignment = Alignment.End) {
-                    Surface(
-                        color = Color(0xDD191E24),
-                        shape = RoundedCornerShape(4.dp),
-                        modifier = Modifier.border(1.dp, Color(0xFF333E48), RoundedCornerShape(4.dp))
+                // Right: Weapon, Ammo, and Pause Button
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = weaponDef.name.uppercase(),
+                            color = Color(0xFF90A4AE),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (combatState.player.isReloading) "RELOADING..."
+                            else "${combatState.player.ammoCurrent} / ${combatState.player.ammoMax}",
+                            color = if (combatState.player.ammoCurrent > 5) Color.White else Color(0xFFFF1744),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+                    IconButton(
+                        onClick = { combatState = combatState.copy(isPaused = true) },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color(0xCC263238), CircleShape)
                     ) {
+                        Icon(
+                            imageVector = Icons.Default.Pause,
+                            contentDescription = "Pause",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            // Top Boss Bar when Boss is Active
+            combatState.boss?.let { boss ->
+                Spacer(Modifier.height(6.dp))
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xDD1A0026)),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, Color(0xFFE040FB), RoundedCornerShape(6.dp))
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "${weaponDef.codeName} LVL $weaponLevel",
-                                color = Color(weaponDef.colorHex),
-                                fontSize = 10.sp,
+                                text = "⚠️ THE ABOMINATION // APEX MUTANT",
+                                color = Color(0xFFE040FB),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                            Text(
+                                text = "${boss.health} / ${boss.maxHealth} HP",
+                                color = Color.White,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = if (combatState.player.isReloading) "RELOADING..." else "${combatState.player.ammoCurrent} / ${combatState.player.ammoMax}",
-                                color = if (combatState.player.isReloading) Color(0xFFFFB300) else if (combatState.player.ammoCurrent <= 5) Color(0xFFFF5252) else Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Black
+                        }
+                        Spacer(Modifier.height(3.dp))
+                        val bossHpRatio = (boss.health.toFloat() / boss.maxHealth).coerceIn(0f, 1f)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .background(Color(0xFF311B92), RoundedCornerShape(3.dp))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(bossHpRatio)
+                                    .background(Color(0xFFE040FB), RoundedCornerShape(3.dp))
                             )
                         }
                     }
+                }
+            }
 
-                    Spacer(Modifier.height(6.dp))
+            // Wave Announcement Banner (Survival Mode)
+            combatState.waveAnnouncement?.let { ann ->
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    color = Color(0xDD4A148C),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.5.dp, Color(0xFFE040FB), RoundedCornerShape(6.dp))
+                ) {
+                    Text(
+                        text = ann,
+                        color = Color.White,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 14.sp,
+                        letterSpacing = 1.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
 
-                    Box(
+        // BOTTOM COMBAT CONTROLS (Ergonomic Touchscreen Layout)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Left Lane Switch Button
+                Button(
+                    onClick = { switchLaneLeft() },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xDD263238)),
+                    modifier = Modifier
+                        .size(width = 90.dp, height = 54.dp)
+                        .border(1.5.dp, Color(0xFF455A64), RoundedCornerShape(12.dp))
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Lane Left", tint = Color.White)
+                        Spacer(Modifier.width(2.dp))
+                        Text("LANE", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
+
+                // Center: Reload and Rapid Fire Buttons
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Reload Button
+                    Button(
+                        onClick = { triggerReload() },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xDD37474F)),
                         modifier = Modifier
-                            .size(86.dp)
-                            .background(if (isHoldingFire) Color(0xFFB71C1C) else Color(0xFFD32F2F), CircleShape)
-                            .border(2.5.dp, Color(0xFFFF5252), CircleShape)
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onPress = {
-                                        isHoldingFire = true
-                                        tryAwaitRelease()
-                                        isHoldingFire = false
-                                    }
-                                )
-                            },
-                        contentAlignment = Alignment.Center
+                            .height(54.dp)
+                            .border(1.5.dp, Color(0xFFFFB300), RoundedCornerShape(12.dp))
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("FIRE", fontWeight = FontWeight.Black, fontSize = 16.sp, color = Color.White)
-                            Text(
-                                "${weaponDef.calculateDamage(weaponLevel)} DMG",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFFFD54F)
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Reload", tint = Color(0xFFFFB300))
+                            Spacer(Modifier.width(4.dp))
+                            Text("RELOAD", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
+                    }
+
+                    // Manual Rapid Fire Button
+                    Button(
+                        onClick = { fireWeapon(force = true) },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xDDE53935)),
+                        modifier = Modifier
+                            .height(54.dp)
+                            .border(1.5.dp, Color(0xFFFF5252), RoundedCornerShape(12.dp))
+                    ) {
+                        Text("FIRE 🎯", fontSize = 12.sp, fontWeight = FontWeight.Black, color = Color.White)
+                    }
+                }
+
+                // Right Lane Switch Button
+                Button(
+                    onClick = { switchLaneRight() },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xDD263238)),
+                    modifier = Modifier
+                        .size(width = 90.dp, height = 54.dp)
+                        .border(1.5.dp, Color(0xFF455A64), RoundedCornerShape(12.dp))
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("LANE", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Spacer(Modifier.width(2.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Lane Right", tint = Color.White)
                     }
                 }
             }
@@ -1816,660 +1254,113 @@ fun CombatScreen(
         if (combatState.isPaused && !combatState.isGameOver && !combatState.isVictory) {
             AlertDialog(
                 onDismissRequest = { combatState = combatState.copy(isPaused = false) },
-                title = { Text("MISSION PAUSED", fontWeight = FontWeight.Bold, color = Color(0xFFFFB300)) },
+                title = { Text("MISSION PAUSED", fontWeight = FontWeight.Black, color = Color(0xFFFFB300)) },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = if (isSurvivalMode) "Mode: Wave Survival (Wave ${combatState.currentWave}/5)" else "Objective: $missionTitle",
-                            color = Color(0xFFB0BEC5),
-                            fontSize = 13.sp
-                        )
-                        Text("Current Kills: ${combatState.killCount}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Text("Equipped: ${weaponDef.name} (LVL $weaponLevel)", color = Color(weaponDef.colorHex), fontSize = 12.sp)
+                    Column {
+                        Text("Tactical operations are suspended.", color = Color.LightGray)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Distance: ${combatState.player.runDistance.toInt()}m", color = Color.White)
+                        Text("Kills: ${combatState.killCount}", color = Color.White)
+                        Text("Squad Size: ${combatState.player.squadCount}", color = Color(0xFF00E676))
                     }
                 },
                 confirmButton = {
                     Button(
                         onClick = { combatState = combatState.copy(isPaused = false) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676))
                     ) {
-                        Text("RESUME", fontWeight = FontWeight.Bold)
+                        Text("RESUME", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { combatState = createInitialState() }) {
-                            Text("RETRY", color = Color(0xFFFFB300), fontWeight = FontWeight.Bold)
-                        }
-                        TextButton(onClick = { navController.popBackStack() }) {
-                            Text("BASE", color = Color(0xFF90A4AE))
-                        }
+                    OutlinedButton(onClick = { navController.popBackStack() }) {
+                        Text("RETURN TO BASE", color = Color.White)
                     }
                 },
-                containerColor = Color(0xFF1A1F24),
-                shape = RoundedCornerShape(8.dp)
+                containerColor = Color(0xFF1E2228)
             )
         }
 
-        // RESULTS OVERLAY: SURVIVAL MODE OR CAMPAIGN
-        if (isSurvivalMode && (combatState.isGameOver || combatState.isVictory)) {
-            val accuracy = if (combatState.totalShotsFired > 0) {
-                (combatState.totalShotsHit.toFloat() / combatState.totalShotsFired * 100f).coerceIn(0f, 100f)
-            } else 0f
-
+        // VICTORY DIALOG
+        if (combatState.isVictory) {
             AlertDialog(
                 onDismissRequest = {},
                 title = {
-                    Text(
-                        text = if (combatState.isVictory) "SURVIVAL VICTORY!" else "SURVIVAL RUN OVER",
-                        fontWeight = FontWeight.Black,
-                        color = if (combatState.isVictory) Color(0xFF4CAF50) else Color(0xFFE53935)
-                    )
+                    Text("OPERATION SUCCESSFUL // EXTRACTED", fontWeight = FontWeight.Black, color = Color(0xFF00E676))
                 },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = if (combatState.isVictory) "You purged all 5 waves and eliminated THE ABOMINATION!" else "Squad succumbed on Wave ${combatState.currentWave}.",
-                            color = Color(0xFFB0BEC5),
-                            fontSize = 13.sp
-                        )
-
-                        Surface(
-                            color = Color(0xFF14191F),
-                            shape = RoundedCornerShape(6.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .border(1.dp, Color(0xFF263238), RoundedCornerShape(6.dp))
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("Waves Cleared:", fontSize = 11.sp, color = Color(0xFF90A4AE))
-                                    Text("${combatState.wavesClearedInRun} / 5 Waves", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                }
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("Zombies Slain:", fontSize = 11.sp, color = Color(0xFF90A4AE))
-                                    Text("${combatState.killCount}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4DD0E1))
-                                }
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("Weapon Accuracy:", fontSize = 11.sp, color = Color(0xFF90A4AE))
-                                    Text("${String.format("%.1f", accuracy)}% (${combatState.totalShotsHit}/${combatState.totalShotsFired})", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFD54F))
-                                }
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Perimeter breached and extraction confirmed!", color = Color.LightGray, fontSize = 12.sp)
+                        HorizontalDivider(color = Color(0xFF37474F))
+                        Text("Distance Run: ${combatState.player.runDistance.toInt()}m", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("Zombies Eliminated: ${combatState.killCount}", color = Color.White)
+                        Text("Surviving Squad: ${combatState.player.squadCount} operatives", color = Color(0xFF00E676))
+                        Spacer(Modifier.height(4.dp))
+                        Text("REWARDS EARNED:", fontWeight = FontWeight.Bold, color = Color(0xFFFFB300), fontSize = 12.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text("🪙 +${rewardCoins + combatState.player.bonusCoinsEarned} Coins", color = Color(0xFFFFB300), fontWeight = FontWeight.Bold)
+                            Text("🍞 +$rewardFood Food", color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
+                            if (combatState.player.bonusMetalEarned > 0) {
+                                Text("🔩 +${combatState.player.bonusMetalEarned} Metal", color = Color(0xFF90A4AE), fontWeight = FontWeight.Bold)
                             }
-                        }
-
-                        if (combatState.survivalCoinsEarned > 0 || combatState.survivalFoodEarned > 0) {
-                            Surface(
-                                color = Color(0xFF1B2E1D),
-                                shape = RoundedCornerShape(4.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(8.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("MILESTONE REWARDS: ", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF81C784))
-                                    Text("+${combatState.survivalCoinsEarned}🪙  +${combatState.survivalFoodEarned}🍞", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFB300))
-                                }
-                            }
-                        } else {
-                            Text(
-                                "No new wave milestones reached. Try clearing higher waves to earn more rewards!",
-                                fontSize = 10.sp,
-                                color = Color(0xFF78909C)
-                            )
                         }
                     }
                 },
                 confirmButton = {
                     Button(
-                        onClick = { combatState = createInitialState() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0277BD))
+                        onClick = { navController.popBackStack() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676))
                     ) {
-                        Text("RETRY SURVIVAL", fontWeight = FontWeight.Bold)
+                        Text("RETURN TO BASE", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
-                    Button(
-                        onClick = { navController.popBackStack() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF37474F))
+                    OutlinedButton(
+                        onClick = {
+                            sessionKey++
+                            combatState = createInitialState()
+                        }
                     ) {
-                        Text("RETURN TO BASE")
+                        Text("REPLAY MISSION", color = Color.White)
                     }
                 },
-                containerColor = Color(0xFF191E23),
-                shape = RoundedCornerShape(8.dp)
-            )
-        } else if (!isSurvivalMode) {
-            // REGULAR MISSION DEFEAT
-            if (combatState.isGameOver) {
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text("MISSION FAILED", fontWeight = FontWeight.Bold, color = Color(0xFFE53935)) },
-                    text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Your squad was overwhelmed by the horde. Player health reached zero.", color = Color(0xFFB0BEC5), fontSize = 13.sp)
-                            Text("Final Kills: ${combatState.killCount}/$targetKills", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text("Rewards: None awarded on defeat.", color = Color(0xFFEF5350), fontSize = 11.sp)
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = { combatState = createInitialState() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0277BD))
-                        ) {
-                            Text("RETRY MISSION", fontWeight = FontWeight.Bold)
-                        }
-                    },
-                    dismissButton = {
-                        Button(
-                            onClick = { navController.popBackStack() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF37474F))
-                        ) {
-                            Text("RETURN TO BASE")
-                        }
-                    },
-                    containerColor = Color(0xFF1E1719),
-                    shape = RoundedCornerShape(8.dp)
-                )
-            }
-
-            // REGULAR MISSION VICTORY
-            if (combatState.isVictory) {
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text("MISSION COMPLETE!", fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50)) },
-                    text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(
-                                if (isBossMission) "THE ABOMINATION has been eradicated! Regional contamination contained." else "Squad successfully evacuated through the extraction point!",
-                                color = Color(0xFFB0BEC5),
-                                fontSize = 13.sp
-                            )
-                            Text("Zombies Eliminated: ${combatState.killCount}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Spacer(Modifier.height(4.dp))
-                            Surface(
-                                color = Color(0xFF1B2E1D),
-                                shape = RoundedCornerShape(4.dp),
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(8.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("REWARDS EARNED: ", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF81C784))
-                                    Text("+$rewardCoins 🪙  +$rewardFood 🍞", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFB300))
-                                }
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = { combatState = createInitialState() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                        ) {
-                            Text("PLAY AGAIN", fontWeight = FontWeight.Bold)
-                        }
-                    },
-                    dismissButton = {
-                        Button(
-                            onClick = { navController.popBackStack() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF8F00))
-                        ) {
-                            Text("RETURN TO BASE", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
-                    },
-                    containerColor = Color(0xFF172019),
-                    shape = RoundedCornerShape(8.dp)
-                )
-            }
-        }
-    }
-}
-
-// Procedural environment rendering
-private fun DrawScope.drawBattlefield(missionId: Int, size: Size) {
-    when (missionId) {
-        100 -> {
-            // Dark Industrial Siege Zone
-            drawRect(Color(0xFF191D21))
-            // Cross-hatch hazard warning markings
-            for (x in 60..size.width.toInt() step 100) {
-                drawLine(Color(0xFF262D35), start = Offset(x.toFloat(), 180f), end = Offset(x.toFloat(), 820f), strokeWidth = 2f)
-            }
-            // Perimeter defense borders
-            drawRect(Color(0xFF4527A0), topLeft = Offset(0f, 160f), size = Size(size.width, 8f))
-            drawRect(Color(0xFF4527A0), topLeft = Offset(0f, 840f), size = Size(size.width, 8f))
-        }
-        4 -> {
-            // Bio-Hazard Containment Lab
-            drawRect(Color(0xFF15181C))
-            // Lab floor grid tile pattern
-            for (x in 80..size.width.toInt() step 120) {
-                drawLine(Color(0xFF1F262E), start = Offset(x.toFloat(), 160f), end = Offset(x.toFloat(), 840f), strokeWidth = 2f)
-            }
-            for (y in 200..800 step 100) {
-                drawLine(Color(0xFF1F262E), start = Offset(0f, y.toFloat()), end = Offset(size.width, y.toFloat()), strokeWidth = 2f)
-            }
-            // Bio-hazard yellow/black barrier warning line
-            drawRect(Color(0xFFFFB300), topLeft = Offset(0f, 160f), size = Size(size.width, 6f))
-            drawRect(Color(0xFFFFB300), topLeft = Offset(0f, 840f), size = Size(size.width, 6f))
-        }
-        1 -> {
-            // Damaged Asphalt Highway
-            drawRect(Color(0xFF1F2327))
-            drawLine(Color(0xFF181B1E), start = Offset(200f, 250f), end = Offset(240f, 320f), strokeWidth = 2f)
-            drawLine(Color(0xFF181B1E), start = Offset(520f, 620f), end = Offset(580f, 660f), strokeWidth = 2f)
-
-            for (x in 60..size.width.toInt() step 90) {
-                drawRect(
-                    color = Color(0x66FFD54F),
-                    topLeft = Offset(x.toFloat(), size.height / 2f - 4f),
-                    size = Size(50f, 8f)
-                )
-            }
-            drawRect(Color(0xFF37474F), topLeft = Offset(0f, 150f), size = Size(size.width, 8f))
-            drawRect(Color(0xFF37474F), topLeft = Offset(0f, 850f), size = Size(size.width, 8f))
-        }
-        2 -> {
-            // Ruined City Streets
-            drawRect(Color(0xFF1A1C1F))
-            for (x in 100..size.width.toInt() step 140) {
-                drawLine(Color(0xFF262A2F), start = Offset(x.toFloat(), 150f), end = Offset(x.toFloat(), 850f), strokeWidth = 2f)
-            }
-            for (y in 200..800 step 120) {
-                drawLine(Color(0xFF262A2F), start = Offset(0f, y.toFloat()), end = Offset(size.width, y.toFloat()), strokeWidth = 2f)
-            }
-        }
-        else -> {
-            // Military Outpost Sand & Metal Ground
-            drawRect(Color(0xFF22241F))
-            drawRect(Color(0xFF3A382C), topLeft = Offset(0f, 160f), size = Size(size.width, 14f))
-            drawRect(Color(0xFF3A382C), topLeft = Offset(0f, 830f), size = Size(size.width, 14f))
-            for (x in 80..size.width.toInt() step 120) {
-                drawLine(Color(0xFF424233), start = Offset(x.toFloat(), 480f), end = Offset(x + 30f, 520f), strokeWidth = 3f)
-            }
-        }
-    }
-}
-
-// Draw Player Character with Tactical Armor & Moving Legs
-private fun DrawScope.drawPlayerCharacter(player: PlayerState, weaponDef: WeaponDef) {
-    val angleDeg = Math.toDegrees(player.facingAngle.toDouble()).toFloat()
-
-    rotate(angleDeg, player.position) {
-        val stride = sin(player.walkAnimPhase.toDouble()).toFloat() * 6f
-        drawCircle(
-            color = Color(0xFF1E2832),
-            radius = 5.5f,
-            center = player.position + Offset(-6f + stride, -10f)
-        )
-        drawCircle(
-            color = Color(0xFF1E2832),
-            radius = 5.5f,
-            center = player.position + Offset(-6f - stride, 10f)
-        )
-
-        drawRect(
-            color = Color(0xFF2C3E50),
-            topLeft = player.position + Offset(-18f, -7f),
-            size = Size(8f, 14f)
-        )
-
-        drawCircle(
-            color = Color(0xFF1565C0),
-            radius = 16f,
-            center = player.position
-        )
-        drawCircle(
-            color = Color(0xFF0D47A1),
-            radius = 11f,
-            center = player.position
-        )
-
-        drawCircle(
-            color = Color(0xFF37474F),
-            radius = 9f,
-            center = player.position + Offset(3f, 0f)
-        )
-        drawRect(
-            color = Color(0xFF00E5FF),
-            topLeft = player.position + Offset(7f, -4f),
-            size = Size(3.5f, 8f)
-        )
-
-        drawCircle(
-            color = Color(0xFFE0E0E0),
-            radius = 4f,
-            center = player.position + Offset(14f, -7f)
-        )
-        drawCircle(
-            color = Color(0xFFE0E0E0),
-            radius = 4f,
-            center = player.position + Offset(14f, 7f)
-        )
-
-        val weaponColor = Color(weaponDef.colorHex)
-        when (weaponDef.id) {
-            1 -> {
-                drawLine(
-                    color = Color(0xFF212121),
-                    start = player.position + Offset(10f, 3f),
-                    end = player.position + Offset(26f, 3f),
-                    strokeWidth = 5f
-                )
-                drawLine(
-                    color = weaponColor,
-                    start = player.position + Offset(20f, 3f),
-                    end = player.position + Offset(27f, 3f),
-                    strokeWidth = 3f
-                )
-            }
-            2 -> {
-                drawLine(
-                    color = Color(0xFF263238),
-                    start = player.position + Offset(10f, 3f),
-                    end = player.position + Offset(21f, 3f),
-                    strokeWidth = 6f
-                )
-                drawLine(
-                    color = weaponColor,
-                    start = player.position + Offset(16f, 3f),
-                    end = player.position + Offset(22f, 3f),
-                    strokeWidth = 3.5f
-                )
-            }
-            3 -> {
-                drawLine(
-                    color = Color(0xFF3E2723),
-                    start = player.position + Offset(8f, 3f),
-                    end = player.position + Offset(18f, 3f),
-                    strokeWidth = 6.5f
-                )
-                drawLine(
-                    color = weaponColor,
-                    start = player.position + Offset(18f, 3f),
-                    end = player.position + Offset(25f, 3f),
-                    strokeWidth = 5f
-                )
-            }
-            else -> {
-                drawLine(
-                    color = Color(0xFF212121),
-                    start = player.position + Offset(10f, 3f),
-                    end = player.position + Offset(32f, 3f),
-                    strokeWidth = 4.5f
-                )
-                drawRect(
-                    color = weaponColor,
-                    topLeft = player.position + Offset(15f, 0f),
-                    size = Size(8f, 3f)
-                )
-            }
-        }
-    }
-}
-
-// Draw Zombie Character
-private fun DrawScope.drawZombieCharacter(z: Zombie) {
-    val angleDeg = Math.toDegrees(z.facingAngle.toDouble()).toFloat()
-
-    if (z.isDying) {
-        val deathRatio = (z.deathTimer / z.deathDuration.toFloat()).coerceIn(0f, 1f)
-        rotate(angleDeg + (1f - deathRatio) * 45f, z.position) {
-            drawCircle(
-                color = Color(0xFF3E2723).copy(alpha = deathRatio * 0.7f),
-                radius = z.size * deathRatio,
-                center = z.position
-            )
-        }
-        return
-    }
-
-    rotate(angleDeg, z.position) {
-        val isFlashing = z.hitFlash > 0
-
-        val (skinColor, clothesColor) = when (z.type) {
-            "Runner" -> Pair(Color(0xFFA93226), Color(0xFF424242))
-            "Brute" -> Pair(Color(0xFF4A148C), Color(0xFF212121))
-            else -> Pair(Color(0xFF4E6B48), Color(0xFF37474F))
-        }
-
-        val renderSkinColor = if (isFlashing) Color.White else skinColor
-
-        val legStride = sin(z.animPhase.toDouble()).toFloat() * (if (z.type == "Runner") 7f else 4f)
-        drawCircle(
-            color = clothesColor,
-            radius = z.size * 0.28f,
-            center = z.position + Offset(-z.size * 0.4f + legStride, -z.size * 0.5f)
-        )
-        drawCircle(
-            color = clothesColor,
-            radius = z.size * 0.28f,
-            center = z.position + Offset(-z.size * 0.4f - legStride, z.size * 0.5f)
-        )
-
-        drawCircle(
-            color = renderSkinColor,
-            radius = z.size,
-            center = z.position
-        )
-        drawCircle(
-            color = if (isFlashing) Color.White else clothesColor,
-            radius = z.size * 0.65f,
-            center = z.position - Offset(z.size * 0.2f, 0f)
-        )
-
-        if (z.type == "Brute") {
-            drawRect(
-                color = Color(0xFF616161),
-                topLeft = z.position + Offset(-z.size * 0.8f, -z.size * 0.9f),
-                size = Size(z.size * 0.5f, z.size * 0.4f)
-            )
-            drawRect(
-                color = Color(0xFF616161),
-                topLeft = z.position + Offset(-z.size * 0.8f, z.size * 0.5f),
-                size = Size(z.size * 0.5f, z.size * 0.4f)
+                containerColor = Color(0xFF1A211D)
             )
         }
 
-        val armSwing = cos(z.animPhase.toDouble()).toFloat() * 3f
-        val attackReach = if (z.isAttacking) z.attackProgress * z.size * 0.8f else 0f
-
-        drawCircle(
-            color = renderSkinColor,
-            radius = z.size * 0.25f,
-            center = z.position + Offset(z.size * 0.7f + attackReach, -z.size * 0.5f + armSwing)
-        )
-        drawCircle(
-            color = renderSkinColor,
-            radius = z.size * 0.25f,
-            center = z.position + Offset(z.size * 0.7f + attackReach, z.size * 0.5f - armSwing)
-        )
-
-        drawCircle(
-            color = renderSkinColor,
-            radius = z.size * 0.55f,
-            center = z.position + Offset(z.size * 0.3f, 0f)
-        )
-        val eyeColor = if (z.type == "Runner") Color(0xFFFFEB3B) else Color(0xFFFF1744)
-        drawCircle(
-            color = eyeColor,
-            radius = 2.2f,
-            center = z.position + Offset(z.size * 0.65f, -z.size * 0.22f)
-        )
-        drawCircle(
-            color = eyeColor,
-            radius = 2.2f,
-            center = z.position + Offset(z.size * 0.65f, z.size * 0.22f)
-        )
-    }
-
-    if (z.health < z.maxHealth || z.type == "Brute") {
-        val barWidth = (z.size * 2.2f).coerceAtLeast(32f)
-        val barHeight = if (z.type == "Brute") 6f else 4.5f
-        val barTopLeft = Offset(z.position.x - barWidth / 2f, z.position.y - z.size - 12f)
-        val hpRatio = (z.health.toFloat() / z.maxHealth).coerceIn(0f, 1f)
-
-        drawRect(Color(0xFF1B1F24), topLeft = barTopLeft, size = Size(barWidth, barHeight))
-        drawRect(
-            color = Color(0xFF37474F),
-            topLeft = barTopLeft,
-            size = Size(barWidth, barHeight),
-            style = Stroke(width = 1f)
-        )
-        drawRect(
-            color = if (hpRatio > 0.5f) Color(0xFF4CAF50) else if (hpRatio > 0.25f) Color(0xFFFFB300) else Color(0xFFFF1744),
-            topLeft = barTopLeft,
-            size = Size(barWidth * hpRatio, barHeight)
-        )
-
-        if (z.type == "Brute") {
-            val paint = android.graphics.Paint().apply {
-                color = android.graphics.Color.WHITE
-                textSize = 18f
-                isFakeBoldText = true
-            }
-            drawContext.canvas.nativeCanvas.drawText(
-                "ELITE BRUTE ${z.health}/${z.maxHealth}",
-                barTopLeft.x - 10f,
-                barTopLeft.y - 4f,
-                paint
+        // DEFEAT DIALOG
+        if (combatState.isGameOver) {
+            AlertDialog(
+                onDismissRequest = {},
+                title = {
+                    Text("SQUAD ELIMINATED // KIA", fontWeight = FontWeight.Black, color = Color(0xFFFF1744))
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Your squad was overwhelmed on the highway.", color = Color.LightGray, fontSize = 12.sp)
+                        HorizontalDivider(color = Color(0xFF37474F))
+                        Text("Distance Reached: ${combatState.player.runDistance.toInt()}m", color = Color.White)
+                        Text("Zombies Eliminated: ${combatState.killCount}", color = Color.White)
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            sessionKey++
+                            combatState = createInitialState()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF1744))
+                    ) {
+                        Text("RETRY RUN", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { navController.popBackStack() }) {
+                        Text("RETURN TO BASE", color = Color.White)
+                    }
+                },
+                containerColor = Color(0xFF241517)
             )
         }
-    }
-}
-
-// Draw The Abomination Boss with Massive Mutant Silhouette & Visual Effects
-private fun DrawScope.drawBossCharacter(b: BossState) {
-    val angleDeg = Math.toDegrees(b.facingAngle.toDouble()).toFloat()
-
-    if (b.isDying) {
-        val deathRatio = (b.deathTimer / b.deathDuration.toFloat()).coerceIn(0f, 1f)
-        rotate(angleDeg + (1f - deathRatio) * 60f, b.position) {
-            drawCircle(
-                color = Color(0xFF4A148C).copy(alpha = deathRatio * 0.8f),
-                radius = b.size * (0.8f + (1f - deathRatio) * 0.4f),
-                center = b.position
-            )
-            drawCircle(
-                color = Color(0xFF00E676).copy(alpha = deathRatio * 0.6f),
-                radius = b.size * 0.5f * deathRatio,
-                center = b.position
-            )
-        }
-        return
-    }
-
-    rotate(angleDeg, b.position) {
-        val isFlashing = b.hitFlash > 0
-        val baseColor = if (isFlashing) Color.White else Color(0xFF2C0B3A)
-        val mutantAccent = if (isFlashing) Color(0xFFFFFF8D) else Color(0xFF7B1FA2)
-        val toxicVeins = Color(0xFF00E676)
-
-        // 1. Heavy Mutant Footprints / Stomp Strides
-        drawCircle(
-            color = Color(0xFF1E1424),
-            radius = b.size * 0.35f,
-            center = b.position + Offset(-b.size * 0.5f, -b.size * 0.6f)
-        )
-        drawCircle(
-            color = Color(0xFF1E1424),
-            radius = b.size * 0.35f,
-            center = b.position + Offset(-b.size * 0.5f, b.size * 0.6f)
-        )
-
-        // 2. Colossal Back Shell / Spines
-        drawCircle(
-            color = Color(0xFF190622),
-            radius = b.size * 0.95f,
-            center = b.position - Offset(b.size * 0.3f, 0f)
-        )
-        // Jagged mutated back spikes
-        for (i in -2..2) {
-            drawRect(
-                color = Color(0xFF512DA8),
-                topLeft = b.position + Offset(-b.size * 0.9f, i * 14f - 6f),
-                size = Size(14f, 12f)
-            )
-        }
-
-        // 3. Titanic Torso
-        drawCircle(
-            color = baseColor,
-            radius = b.size,
-            center = b.position
-        )
-        // Mutated chest carapace
-        drawCircle(
-            color = mutantAccent,
-            radius = b.size * 0.68f,
-            center = b.position
-        )
-        // Glowing bio-hazard vein fissures
-        drawLine(
-            color = toxicVeins,
-            start = b.position - Offset(b.size * 0.4f, 0f),
-            end = b.position + Offset(b.size * 0.3f, 0f),
-            strokeWidth = 3.5f
-        )
-        drawLine(
-            color = toxicVeins,
-            start = b.position + Offset(-b.size * 0.2f, -b.size * 0.3f),
-            end = b.position + Offset(b.size * 0.2f, b.size * 0.3f),
-            strokeWidth = 3f
-        )
-
-        // 4. Asymmetrical Titanic Arms
-        val slamLift = if (b.currentPattern == BossPattern.TELEGRAPH_SLAM) b.telegraphProgress * 18f else 0f
-        // Left arm: Massive bone club fist
-        drawCircle(
-            color = mutantAccent,
-            radius = b.size * 0.4f,
-            center = b.position + Offset(b.size * 0.6f + slamLift, -b.size * 0.7f)
-        )
-        drawCircle(
-            color = Color(0xFF212121),
-            radius = b.size * 0.25f,
-            center = b.position + Offset(b.size * 0.95f + slamLift, -b.size * 0.7f)
-        )
-
-        // Right arm: Mutated giant claw blade
-        drawCircle(
-            color = mutantAccent,
-            radius = b.size * 0.35f,
-            center = b.position + Offset(b.size * 0.6f + slamLift, b.size * 0.7f)
-        )
-        drawLine(
-            color = Color(0xFF673AB7),
-            start = b.position + Offset(b.size * 0.6f + slamLift, b.size * 0.7f),
-            end = b.position + Offset(b.size * 1.25f + slamLift, b.size * 0.85f),
-            strokeWidth = 9f
-        )
-
-        // 5. Mutated Head & Triple Glowing Eye Cluster
-        drawCircle(
-            color = baseColor,
-            radius = b.size * 0.48f,
-            center = b.position + Offset(b.size * 0.45f, 0f)
-        )
-        // 3 Glowing bio-luminescent toxic eyes
-        drawCircle(
-            color = toxicVeins,
-            radius = 3.8f,
-            center = b.position + Offset(b.size * 0.82f, -7f)
-        )
-        drawCircle(
-            color = toxicVeins,
-            radius = 3.8f,
-            center = b.position + Offset(b.size * 0.82f, 7f)
-        )
-        drawCircle(
-            color = Color(0xFFFF1744),
-            radius = 4.2f,
-            center = b.position + Offset(b.size * 0.92f, 0f)
-        )
     }
 }

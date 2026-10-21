@@ -78,6 +78,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 dao.insertMission(m)
             }
         }
+
+        // Guarantee that completed campaign missions unlock the next chapter
+        val updatedMissions = dao.getMissions().first()
+        val m1 = updatedMissions.find { it.missionId == 1 }
+        val m2 = updatedMissions.find { it.missionId == 2 }
+        val m3 = updatedMissions.find { it.missionId == 3 }
+        val m4 = updatedMissions.find { it.missionId == 4 }
+        if (m1?.isCompleted == true && m2 != null && !m2.isUnlocked) {
+            m2.isUnlocked = true
+            dao.updateMission(m2)
+        }
+        if (m2?.isCompleted == true && m3 != null && !m3.isUnlocked) {
+            m3.isUnlocked = true
+            dao.updateMission(m3)
+        }
+        if (m3?.isCompleted == true && m4 != null && !m4.isUnlocked) {
+            m4.isUnlocked = true
+            dao.updateMission(m4)
+        }
     }
 
     fun getBuildings(): kotlinx.coroutines.flow.Flow<List<BaseBuilding>> = dao.getBuildings()
@@ -274,6 +293,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             dao.updatePlayerProfile(profile)
             dao.updateMission(survivalRecord)
             onAwarded(earnedCoins, earnedFood)
+        }
+    }
+
+    fun addSupplies(coins: Long, metal: Long, food: Long = 0L) {
+        viewModelScope.launch {
+            val profile = dao.getPlayerProfile().first() ?: return@launch
+            profile.coins += coins
+            profile.metal += metal
+            profile.food += food
+            dao.updatePlayerProfile(profile)
         }
     }
 }
