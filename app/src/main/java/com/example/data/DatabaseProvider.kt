@@ -17,7 +17,8 @@ object DatabaseProvider {
                 context.applicationContext,
                 AppDatabase::class.java,
                 "zombie_frontier_db"
-            ).addCallback(object : RoomDatabase.Callback() {
+            ).fallbackToDestructiveMigration()
+            .addCallback(object : RoomDatabase.Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
                     super.onCreate(db)
                     CoroutineScope(Dispatchers.IO).launch {
@@ -56,9 +57,18 @@ object DatabaseProvider {
         // Initial Missions
         val missions = listOf(
             MissionProgress(1, isUnlocked = true),
-            MissionProgress(2),
-            MissionProgress(3)
+            MissionProgress(2, isUnlocked = false),
+            MissionProgress(3, isUnlocked = false)
         )
         missions.forEach { dao.insertMission(it) }
+
+        // Initial Weapons
+        val weapons = listOf(
+            WeaponProgress(1, level = 1, isUnlocked = true, isEquipped = true),
+            WeaponProgress(2, level = 1, isUnlocked = false, isEquipped = false),
+            WeaponProgress(3, level = 1, isUnlocked = false, isEquipped = false),
+            WeaponProgress(4, level = 1, isUnlocked = false, isEquipped = false)
+        )
+        weapons.forEach { dao.insertWeaponProgress(it) }
     }
 }

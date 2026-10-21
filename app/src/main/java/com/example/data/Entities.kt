@@ -11,7 +11,9 @@ data class PlayerProfile(
     var food: Long = 500,
     var metal: Long = 200,
     var energy: Int = 50,
-    var experience: Long = 0
+    var experience: Long = 0,
+    var soundEnabled: Boolean = true,
+    var musicEnabled: Boolean = true
 )
 
 @Entity(tableName = "base_buildings")

@@ -37,6 +37,15 @@ interface GameDao {
 
     @Update
     suspend fun updateMission(mission: MissionProgress)
+
+    @Query("SELECT * FROM weapon_progress")
+    fun getWeaponProgress(): Flow<List<WeaponProgress>>
+
+    @Update
+    suspend fun updateWeaponProgress(weapon: WeaponProgress)
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertWeaponProgress(weapon: WeaponProgress)
 }
 
 @Database(
