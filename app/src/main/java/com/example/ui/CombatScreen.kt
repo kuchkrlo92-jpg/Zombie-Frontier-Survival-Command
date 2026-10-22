@@ -202,7 +202,7 @@ fun CombatScreen(
         val gates = generateTacticalGates(if (isSurvivalMode) 3000f else targetDistance)
         val obstacles = generateObstacles(if (isSurvivalMode) 3000f else targetDistance)
 
-        val initialBoss = if (isBossMission || isSurvivalMode) {
+        val initialBoss = if (isBossMission || isSurvivalMode || missionId == 3) {
             val type = when {
                 isSurvivalMode -> BossType.PLAGUE_QUEEN
                 missionId == 3 -> BossType.IRON_TYRANT
@@ -592,30 +592,41 @@ fun CombatScreen(
             val newShockwaves = state.laneShockwaves.map { it.copy(distanceZ = it.distanceZ - it.speedZ) }.toMutableList()
 
             updatedBoss?.let { boss ->
-                var bHealth = boss.health
+                var bHealth = maxOf(0, boss.health)
                 var bPattern = boss.currentPattern
                 var bTimer = boss.patternTimer + 1
                 var bSlamCd = maxOf(0, boss.slamCooldown - 1)
                 var bChargeCd = maxOf(0, boss.chargeCooldown - 1)
                 var bSummonCd = maxOf(0, boss.summonCooldown - 1)
                 var bIsDying = boss.isDying
+                var bIsDefeated = boss.isDefeated
                 var bDeathTimer = boss.deathTimer
                 var bHasDamagedInCharge = boss.hasDamagedInCharge
                 var bTelegraphLane = boss.telegraphLane
                 var bLaneX = boss.visualLaneX
                 var bDistZ = boss.distanceZ
 
-                if (bHealth <= 0 && !bIsDying) {
+                // Reliable death transition trigger: strictly happens once
+                if (bHealth <= 0 && !bIsDying && !bIsDefeated) {
                     bIsDying = true
                     bDeathTimer = 0
                     bPattern = BossPattern.IDLE
+                    bHasDamagedInCharge = true
+                    newShockwaves.clear()
                 }
 
-                if (bIsDying) {
-                    bDeathTimer++
-                    if (bDeathTimer >= boss.deathDuration) {
-                        updatedBoss = null
-                        return@let
+                if (bIsDying || bIsDefeated) {
+                    // Boss is dead or dying: immediately clear all attack shockwaves, cancel attacks, block charge damage
+                    newShockwaves.clear()
+                    bPattern = BossPattern.IDLE
+                    bHasDamagedInCharge = true
+
+                    if (bIsDying) {
+                        bDeathTimer++
+                        if (bDeathTimer >= boss.deathDuration) {
+                            bIsDying = false
+                            bIsDefeated = true
+                        }
                     }
                 } else {
                     when (bPattern) {
@@ -712,6 +723,7 @@ fun CombatScreen(
                     distanceZ = bDistZ,
                     hitFlash = maxOf(0, boss.hitFlash - 1),
                     isDying = bIsDying,
+                    isDefeated = bIsDefeated,
                     deathTimer = bDeathTimer
                 )
             }
@@ -833,7 +845,8 @@ fun CombatScreen(
                     it.distanceZ + laneDiff * 60f
                 }
 
-            val hasTarget = (closestZombie != null && closestZombie.distanceZ < 260f) || (updatedBoss != null && updatedBoss!!.distanceZ < 240f)
+            val hasTarget = (closestZombie != null && closestZombie.distanceZ < 260f) || 
+                (updatedBoss != null && updatedBoss!!.canAttack && updatedBoss!!.distanceZ < 240f)
             if (hasTarget || isHoldingFire) {
                 fireWeapon()
             }
@@ -849,10 +862,10 @@ fun CombatScreen(
 
                 // Check hit against boss
                 updatedBoss?.let { boss ->
-                    if (!bulletConsumed && abs(bullet.startLaneX - boss.visualLaneX) < 0.7f && abs(newBulletDist - boss.distanceZ) < 18f) {
+                    if (!bulletConsumed && !boss.isDead && abs(bullet.startLaneX - boss.visualLaneX) < 0.7f && abs(newBulletDist - boss.distanceZ) < 18f) {
                         bulletConsumed = true
-                        val newBossHp = maxOf(0, boss.health - bullet.damage)
-                        updatedBoss = boss.copy(health = newBossHp, hitFlash = 3)
+                        val (damagedBoss, justDied) = boss.applyDamage(bullet.damage)
+                        updatedBoss = damagedBoss
                         SoundFx.playZombieHit(context)
                         newDamages.add(
                             FloatingDamage(
@@ -861,9 +874,10 @@ fun CombatScreen(
                                 isCritical = bullet.isCritical
                             )
                         )
-                        if (newBossHp <= 0) {
+                        if (justDied) {
                             SoundFx.playZombieDeath(context)
                             newKills++
+                            newShockwaves.clear()
                         }
                     }
                 }
@@ -931,12 +945,14 @@ fun CombatScreen(
 
             // 10. Victory and Game Over Evaluation
             val isGameOver = (newPlayer.health <= 0)
-            val isBossDead = (updatedBoss != null && updatedBoss!!.health <= 0)
+            val isBossDead = (updatedBoss != null && (updatedBoss!!.health <= 0 || updatedBoss!!.isDefeated)) ||
+                (state.boss != null && (state.boss!!.health <= 0 || state.boss!!.isDefeated))
             val isCampaignDistanceReached = (!state.isSurvivalMode && newPlayer.runDistance >= newPlayer.targetDistance)
-            val isSurvivalWavesComplete = (state.isSurvivalMode && curWave >= 5 && (updatedBoss == null || updatedBoss!!.health <= 0) && newKills >= 60)
+            val isSurvivalWavesComplete = (state.isSurvivalMode && curWave >= 5 && (updatedBoss == null || updatedBoss!!.isDead) && newKills >= 60)
 
             val isVictory = if (isGameOver) false
-            else if (isBossMission) isBossDead
+            else if (state.isVictory) true
+            else if (isBossMission) (isBossDead && (updatedBoss?.isDefeated == true || state.boss?.isDefeated == true))
             else if (state.isSurvivalMode) isSurvivalWavesComplete
             else isCampaignDistanceReached
 
@@ -1005,11 +1021,13 @@ fun CombatScreen(
                     )
                 }
         ) {
+            val environmentMode = GameSettings.getEnvironmentMode(context)
             LaneRenderer.renderScene(
                 drawScope = this,
                 state = combatState,
                 width = size.width,
-                height = size.height
+                height = size.height,
+                environmentMode = environmentMode
             )
         }
 

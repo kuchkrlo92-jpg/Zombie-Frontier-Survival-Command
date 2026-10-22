@@ -34,6 +34,7 @@ fun SettingsScreen(navController: NavController) {
     var damageNumbersEnabled by remember { mutableStateOf(GameSettings.isShowDamageNumbers(context)) }
     var joystickSensitivity by remember { mutableFloatStateOf(GameSettings.getJoystickSensitivity(context)) }
     var difficulty by remember { mutableStateOf(GameSettings.getDifficulty(context)) }
+    var environmentMode by remember { mutableStateOf(GameSettings.getEnvironmentMode(context)) }
     var showRestoreDialog by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -137,6 +138,45 @@ fun SettingsScreen(navController: NavController) {
                             ) {
                                 Text(
                                     q,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSelected) Color.White else Color(0xFFB0BEC5)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Divider(color = Color(0xFF263238), thickness = 0.5.dp)
+
+                // Environment Mode Selector (DAY / NIGHT)
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("Combat Environment Mode", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
+                    Text("Select Day sunlight or cinematic Night horror lighting with moonlight and streetlights", fontSize = 11.sp, color = Color(0xFF90A4AE))
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("DAY", "NIGHT").forEach { mode ->
+                            val isSelected = environmentMode == mode
+                            OutlinedButton(
+                                onClick = {
+                                    environmentMode = mode
+                                    GameSettings.setEnvironmentMode(context, mode)
+                                },
+                                shape = RoundedCornerShape(6.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = if (isSelected) Color(0xFF0288D1) else Color(0xFF14191E)
+                                ),
+                                border = ButtonDefaults.outlinedButtonBorder.copy(
+                                    width = 1.dp,
+                                    brush = androidx.compose.ui.graphics.SolidColor(if (isSelected) Color(0xFF00E5FF) else Color(0xFF37474F))
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    if (mode == "DAY") "☀ DAYLIGHT" else "🌙 NIGHT OPS",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isSelected) Color.White else Color(0xFFB0BEC5)

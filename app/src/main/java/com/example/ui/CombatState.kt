@@ -66,6 +66,7 @@ data class BossState(
     var hasDamagedInCharge: Boolean = false,
     var telegraphProgress: Float = 0f,
     var isDying: Boolean = false,
+    var isDefeated: Boolean = false,
     var deathTimer: Int = 0,
     var deathDuration: Int = 50,
     // Lane runner extensions
@@ -74,7 +75,30 @@ data class BossState(
     var targetLane: Int = 1,
     var telegraphLane: Int = 1,
     var visualLaneX: Float = 1f
-)
+) {
+    val isDead: Boolean
+        get() = health <= 0 || isDying || isDefeated
+
+    val canAttack: Boolean
+        get() = !isDead
+
+    fun applyDamage(damage: Int): Pair<BossState, Boolean> {
+        if (isDead) {
+            return Pair(this, false)
+        }
+        val clampedHealth = maxOf(0, health - damage)
+        val justDied = clampedHealth <= 0
+        val updated = this.copy(
+            health = clampedHealth,
+            hitFlash = if (justDied) 5 else 3,
+            isDying = if (justDied) true else isDying,
+            deathTimer = if (justDied) 0 else deathTimer,
+            currentPattern = if (justDied) BossPattern.IDLE else currentPattern,
+            hasDamagedInCharge = if (justDied) true else hasDamagedInCharge
+        )
+        return Pair(updated, justDied)
+    }
+}
 
 data class Zombie(
     val id: Int,

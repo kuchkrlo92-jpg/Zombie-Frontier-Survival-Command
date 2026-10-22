@@ -69,32 +69,78 @@ object LaneRenderer {
         drawScope: DrawScope,
         state: CombatState,
         width: Float,
-        height: Float
+        height: Float,
+        environmentMode: String = "DAY"
     ) {
         val horizonY = height * 0.28f
         val horizonX = width * 0.5f
         val playerY = height * 0.78f
         val horizonRoadWidth = width * 0.24f
         val bottomRoadWidth = width * 0.92f
+        val isNight = environmentMode == "NIGHT"
 
-        // 1. Apocalyptic Sky & Atmospheric Backdrop (Improved Gradient)
-        drawScope.drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(
-                    Color(0xFF050508),
-                    Color(0xFF101015),
-                    Color(0xFF281018),
-                    Color(0xFF441822), 
-                    Color(0xFF662230)
+        // 1. Sky & Atmospheric Backdrop (Day vs Night)
+        if (isNight) {
+            drawScope.drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF02030A),
+                        Color(0xFF060918),
+                        Color(0xFF0F172A),
+                        Color(0xFF1E293B)
+                    ),
+                    startY = 0f,
+                    endY = horizonY
                 ),
-                startY = 0f,
-                endY = horizonY
-            ),
-            size = Size(width, horizonY)
-        )
+                size = Size(width, horizonY)
+            )
+            // Moon with soft halo glow
+            drawScope.drawCircle(
+                color = Color(0xFFE2E8F0).copy(alpha = 0.85f),
+                radius = 28f,
+                center = Offset(width * 0.8f, horizonY * 0.35f)
+            )
+            drawScope.drawCircle(
+                color = Color(0x3394A3B8),
+                radius = 48f,
+                center = Offset(width * 0.8f, horizonY * 0.35f)
+            )
+            // Stars
+            for (s in 0..12) {
+                val sx = (s * 73f) % width
+                val sy = (s * 31f) % (horizonY * 0.7f)
+                drawScope.drawCircle(Color(0xCCFFFFFF), radius = 1.5f, center = Offset(sx, sy))
+            }
+        } else {
+            drawScope.drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF1565C0),
+                        Color(0xFF1E88E5),
+                        Color(0xFF42A5F5),
+                        Color(0xFF90CAF9)
+                    ),
+                    startY = 0f,
+                    endY = horizonY
+                ),
+                size = Size(width, horizonY)
+            )
+            // Bright Sun
+            drawScope.drawCircle(
+                color = Color(0xFFFFEE58).copy(alpha = 0.9f),
+                radius = 32f,
+                center = Offset(width * 0.78f, horizonY * 0.3f)
+            )
+            drawScope.drawCircle(
+                color = Color(0x33FFEE58),
+                radius = 60f,
+                center = Offset(width * 0.78f, horizonY * 0.3f)
+            )
+        }
+
         // Atmospheric Haze
         drawScope.drawRect(
-            color = Color(0x33333344),
+            color = if (isNight) Color(0x440F172A) else Color(0x3390CAF9),
             topLeft = Offset(0f, horizonY - 40f),
             size = Size(width, 40f)
         )
@@ -106,11 +152,11 @@ object LaneRenderer {
             val buildingStep = width / 18f
             for (i in 0..18) {
                 val bH = when (i % 5) {
-                    0 -> 35f
-                    1 -> 20f
-                    2 -> 45f
-                    3 -> 25f
-                    else -> 15f
+                    0 -> 38f
+                    1 -> 22f
+                    2 -> 48f
+                    3 -> 28f
+                    else -> 16f
                 }
                 lineTo(curX, horizonY - bH)
                 lineTo(curX + buildingStep, horizonY - bH)
@@ -119,7 +165,7 @@ object LaneRenderer {
             lineTo(width, horizonY)
             close()
         }
-        drawScope.drawPath(skylinePath, Color(0xFF131118))
+        drawScope.drawPath(skylinePath, if (isNight) Color(0xFF090D14) else Color(0xFF263238))
 
         // Red aircraft warning lights on top of ruined skyscrapers
         for (i in 0..5) {
@@ -130,7 +176,7 @@ object LaneRenderer {
 
         // Toxic Ocean / Harbor water below bridge on left & right sides
         drawScope.drawRect(
-            color = Color(0xFF0C141C),
+            color = if (isNight) Color(0xFF04080D) else Color(0xFF0C141C),
             topLeft = Offset(0f, horizonY),
             size = Size(width, height - horizonY)
         )
@@ -142,20 +188,20 @@ object LaneRenderer {
             val rxLeft = width * 0.08f + sin(r.toFloat() + ripplePhase * 0.1f) * 12f
             val rxRight = width * 0.92f - sin(r.toFloat() + ripplePhase * 0.1f) * 12f
             drawScope.drawLine(
-                color = Color(0x334DD0E1),
+                color = if (isNight) Color(0x3300E5FF) else Color(0x334DD0E1),
                 start = Offset(rxLeft - 25f, ry),
                 end = Offset(rxLeft + 25f, ry),
                 strokeWidth = 2f
             )
             drawScope.drawLine(
-                color = Color(0x334DD0E1),
+                color = if (isNight) Color(0x3300E5FF) else Color(0x334DD0E1),
                 start = Offset(rxRight - 25f, ry),
                 end = Offset(rxRight + 25f, ry),
                 strokeWidth = 2f
             )
         }
 
-        // 2. Elevated Highway Bridge Road Polygon
+        // 2. Realistic Elevated Highway Bridge Road Polygon with Asphalt Texture & Cracks
         val roadPath = Path().apply {
             moveTo(horizonX - horizonRoadWidth / 2f, horizonY)
             lineTo(horizonX + horizonRoadWidth / 2f, horizonY)
@@ -163,7 +209,22 @@ object LaneRenderer {
             lineTo(horizonX - bottomRoadWidth / 2f, height)
             close()
         }
-        drawScope.drawPath(roadPath, Color(0xFF1E2126))
+        drawScope.drawPath(roadPath, if (isNight) Color(0xFF101418) else Color(0xFF21252B))
+
+        // Scrolling Asphalt Cracks, Potholes & Texture Details for realism
+        val roadScroll = (state.player.runDistance * 12f) % 120f
+        for (c in 0..8) {
+            val cy = horizonY + ((c * 45f - roadScroll + 300f) % 300f) * ((height - horizonY) / 300f)
+            val cWidth = (bottomRoadWidth - horizonRoadWidth) * ((cy - horizonY) / (height - horizonY)) + horizonRoadWidth
+            val cx = horizonX + ((c * 17f) % 50f - 25f) * (cWidth / horizonRoadWidth) * 0.3f
+            val crackSize = 12f * (1f + (cy - horizonY) / (height - horizonY) * 1.5f)
+
+            drawScope.drawOval(
+                color = if (isNight) Color(0xFF080A0D) else Color(0xFF15181C),
+                topLeft = Offset(cx - crackSize, cy - crackSize * 0.4f),
+                Size(crackSize * 2f, crackSize * 0.8f)
+            )
+        }
 
         // Bridge Concrete Guardrails on left and right
         val leftRail = Path().apply {
@@ -183,6 +244,21 @@ object LaneRenderer {
             close()
         }
         drawScope.drawPath(rightRail, Color(0xFF37474F))
+
+        // Working Streetlights along guardrails in Night mode casting light pools
+        if (isNight) {
+            for (sl in 0..4) {
+                val slZ = sl * 70f - (state.player.runDistance * 3f) % 280f
+                if (slZ in 0f..250f) {
+                    val (slPos, slScale, _) = project(0.0f, slZ, width, height)
+                    drawScope.drawOval(
+                        color = Color(0xFFFFEE58).copy(alpha = 0.25f),
+                        topLeft = Offset(slPos.x - 40f * slScale, slPos.y - 15f * slScale),
+                        size = Size(80f * slScale, 30f * slScale)
+                    )
+                }
+            }
+        }
 
         // Yellow and black hazard edge lines along highway borders
         drawScope.drawLine(
@@ -457,7 +533,7 @@ object LaneRenderer {
             }
         }
 
-        // 9. The Abomination Boss
+        // 9. The Boss (The Abomination, The Iron Tyrant, The Plague Queen)
         state.boss?.let { boss ->
             if (boss.distanceZ in -15f..400f) {
                 val (bPos, bScale, bLaneW) = project(boss.visualLaneX, boss.distanceZ, width, height)
@@ -466,9 +542,64 @@ object LaneRenderer {
 
                 when {
                     boss.isDying -> {
-                        // Death animation: collapse and fade
-                        val collapse = boss.deathTimer.toFloat() / boss.deathDuration.toFloat()
-                        drawScope.drawOval(Color(0xFF424242), Offset(bPos.x - bossW / 2f + collapse * 20f, bPos.y - bossH + collapse * 50f), Size(bossW * (1f - collapse * 0.5f), bossH * (0.8f - collapse * 0.5f)))
+                        // Dramatic death animation: stagger, shudder, collapse, and dissolve
+                        val collapse = (boss.deathTimer.toFloat() / boss.deathDuration.toFloat()).coerceIn(0f, 1f)
+                        val staggerX = sin(boss.deathTimer * 0.8f) * 10f * (1f - collapse)
+                        val fadeAlpha = (1f - collapse * 0.75f).coerceIn(0.15f, 1f)
+
+                        when (boss.bossType) {
+                            BossType.ABOMINATION -> {
+                                val deathColor = Color(0xFF1B5E20).copy(alpha = fadeAlpha)
+                                drawScope.drawOval(
+                                    deathColor,
+                                    Offset(bPos.x - bossW * 0.5f + staggerX, bPos.y - bossH * (1f - collapse * 0.6f)),
+                                    Size(bossW * (1f - collapse * 0.35f), bossH * (0.8f - collapse * 0.5f))
+                                )
+                                // Dissolving toxic smoke & sparks
+                                for (s in 0 until 6) {
+                                    val spX = bPos.x - bossW * 0.3f + (s * bossW * 0.12f) + sin((boss.deathTimer + s).toFloat()) * 12f
+                                    val spY = bPos.y - bossH * 0.5f - (collapse * 60f) - (s * 8f)
+                                    drawScope.drawCircle(Color(0xFF76FF03).copy(alpha = (1f - collapse).coerceIn(0f, 1f)), 4f * bScale, Offset(spX, spY))
+                                }
+                            }
+                            BossType.IRON_TYRANT -> {
+                                val deathColor = Color(0xFF37474F).copy(alpha = fadeAlpha)
+                                drawScope.drawRect(
+                                    deathColor,
+                                    Offset(bPos.x - bossW * 0.5f + staggerX, bPos.y - bossH * (0.9f - collapse * 0.5f)),
+                                    Size(bossW * (1f - collapse * 0.25f), bossH * (0.8f - collapse * 0.5f))
+                                )
+                                // Metal explosion sparks
+                                for (s in 0 until 6) {
+                                    val spX = bPos.x - bossW * 0.3f + (s * bossW * 0.12f)
+                                    val spY = bPos.y - bossH * 0.4f - (collapse * 50f) - (s * 6f)
+                                    drawScope.drawCircle(Color(0xFFFF9100).copy(alpha = (1f - collapse).coerceIn(0f, 1f)), 5f * bScale, Offset(spX, spY))
+                                }
+                            }
+                            BossType.PLAGUE_QUEEN -> {
+                                val deathColor = Color(0xFF4A148C).copy(alpha = fadeAlpha)
+                                drawScope.drawOval(
+                                    deathColor,
+                                    Offset(bPos.x - bossW * 0.3f + staggerX, bPos.y - bossH * (1f - collapse * 0.6f)),
+                                    Size(bossW * (0.6f - collapse * 0.2f), bossH * (0.9f - collapse * 0.5f))
+                                )
+                                // Purple spore burst
+                                for (s in 0 until 6) {
+                                    val spX = bPos.x - bossW * 0.2f + (s * bossW * 0.08f)
+                                    val spY = bPos.y - bossH * 0.5f - (collapse * 55f) - (s * 7f)
+                                    drawScope.drawCircle(Color(0xFFEA80FC).copy(alpha = (1f - collapse).coerceIn(0f, 1f)), 4f * bScale, Offset(spX, spY))
+                                }
+                            }
+                        }
+                    }
+                    boss.isDefeated -> {
+                        // Defeated state: non-interactive smoking remains on the ground, no health bar or attacks
+                        val carcassColor = Color(0xFF1E1E1E).copy(alpha = 0.45f)
+                        drawScope.drawOval(
+                            carcassColor,
+                            Offset(bPos.x - bossW * 0.4f, bPos.y - bossH * 0.22f),
+                            Size(bossW * 0.8f, bossH * 0.22f)
+                        )
                     }
                     else -> {
                         when (boss.bossType) {
@@ -495,11 +626,13 @@ object LaneRenderer {
                     }
                 }
 
-                // Health bar
-                val hpBarW = bossW * 1.2f
-                val hpRatio = boss.health.toFloat() / boss.maxHealth.toFloat()
-                drawScope.drawRect(Color(0xFF212121), Offset(bPos.x - hpBarW / 2f, bPos.y - bossH * 1.2f), Size(hpBarW, 8f * bScale))
-                drawScope.drawRect(Color(0xFFE040FB), Offset(bPos.x - hpBarW / 2f, bPos.y - bossH * 1.2f), Size(hpBarW * hpRatio, 8f * bScale))
+                // Health bar (only rendered while actively alive, hidden when dying or defeated)
+                if (!boss.isDying && !boss.isDefeated) {
+                    val hpBarW = bossW * 1.2f
+                    val hpRatio = (boss.health.toFloat() / boss.maxHealth.toFloat()).coerceIn(0f, 1f)
+                    drawScope.drawRect(Color(0xFF212121), Offset(bPos.x - hpBarW / 2f, bPos.y - bossH * 1.2f), Size(hpBarW, 8f * bScale))
+                    drawScope.drawRect(Color(0xFFE040FB), Offset(bPos.x - hpBarW / 2f, bPos.y - bossH * 1.2f), Size(hpBarW * hpRatio, 8f * bScale))
+                }
             }
         }
 
@@ -636,40 +769,247 @@ object LaneRenderer {
         // 12. The Survivor Squad at Player Depth (z = 0)
         val (playerPos, _, playerLaneW) = project(state.player.visualLaneX, 0f, width, height)
 
-        // Draw Recruited Squad Members running in formation around the Commander
+        // Draw Recruited Squad Members: Elite Modern Special Forces Commandos (True 85–90% Scale)
         val squadCount = state.player.squadCount
         if (squadCount > 1) {
             val memberCount = minOf(16, squadCount - 1)
+            val timeSinceFire = System.currentTimeMillis() - state.player.lastFireTimeMs
+            val sRecoil = if (timeSinceFire < 70) 5f else 0f
+            val isSquadShooting = timeSinceFire < 60
+
             for (m in 1..memberCount) {
-                // Wedge formation offsets: left wing, right wing, back row
+                // Tactical Wedge / Delta formation flanking the Commander (wider spacing for true 85-90% scale)
+                // Leaving central corridor (-78f to +78f) clear so road ahead is completely visible
                 val isLeftWing = (m % 2 != 0)
                 val rank = (m + 1) / 2
-                val offsetX = if (isLeftWing) -rank * 26f else rank * 26f
-                val offsetY = rank * 22f
+                val offsetX = if (isLeftWing) -78f - (rank - 1) * 54f else 78f + (rank - 1) * 54f
+                val offsetY = 26f + (rank - 1) * 36f
 
                 val mPos = Offset(playerPos.x + offsetX, playerPos.y + offsetY)
-                val mAnim = sin((state.player.walkAnimPhase + m) * 10f) * 4f
+                val sLegAnim = sin((state.player.walkAnimPhase + m * 0.7f) * 10f) * 8f
+                val sBob = abs(sLegAnim) * 0.35f
 
-                // Squad member shadow
+                // Role variation: 0 = Support/Comms, 1 = Rifleman, 2 = Breacher
+                val role = m % 3
+
+                // 1. Scaled Ground Shadow (proportional to true 85-90% size)
                 drawScope.drawOval(
                     color = Color(0x66000000),
-                    topLeft = Offset(mPos.x - 14f, mPos.y + 6f),
-                    size = Size(28f, 10f)
+                    topLeft = Offset(mPos.x - 40f, mPos.y + 4f),
+                    size = Size(80f, 22f)
                 )
-                // Tactical blue beret & combat uniform
-                drawScope.drawCircle(Color(0xFF0288D1), radius = 9f, center = Offset(mPos.x, mPos.y - 32f + mAnim * 0.4f))
+
+                // 2. Combat Boots (Matte Black)
                 drawScope.drawRect(
-                    color = Color(0xFF1565C0),
-                    topLeft = Offset(mPos.x - 11f, mPos.y - 23f + mAnim * 0.3f),
-                    size = Size(22f, 20f)
+                    color = Color(0xFF0A0A0A),
+                    topLeft = Offset(mPos.x - 20f + sLegAnim, mPos.y - 10f),
+                    size = Size(16f, 12f)
                 )
-                // Support rifle
+                drawScope.drawRect(
+                    color = Color(0xFF0A0A0A),
+                    topLeft = Offset(mPos.x + 4f - sLegAnim, mPos.y - 10f),
+                    size = Size(16f, 12f)
+                )
+
+                // 3. Tactical Pants & Articulated Legs with Knee Pads
+                drawScope.drawLine(
+                    color = Color(0xFF212121),
+                    start = Offset(mPos.x - 12f, mPos.y - 70f + sBob),
+                    end = Offset(mPos.x - 12f + sLegAnim, mPos.y - 8f),
+                    strokeWidth = 10f
+                )
+                drawScope.drawLine(
+                    color = Color(0xFF212121),
+                    start = Offset(mPos.x + 12f, mPos.y - 70f + sBob),
+                    end = Offset(mPos.x + 12f - sLegAnim, mPos.y - 8f),
+                    strokeWidth = 10f
+                )
+                // Reinforced knee pads
+                drawScope.drawRect(
+                    color = Color(0xFF141414),
+                    topLeft = Offset(mPos.x - 17f + sLegAnim * 0.6f, mPos.y - 42f + sBob),
+                    size = Size(12f, 12f)
+                )
+                drawScope.drawRect(
+                    color = Color(0xFF141414),
+                    topLeft = Offset(mPos.x + 5f - sLegAnim * 0.6f, mPos.y - 42f + sBob),
+                    size = Size(12f, 12f)
+                )
+
+                // 4. Utility Belt & Mag Pouches
+                drawScope.drawRect(
+                    color = Color(0xFF0F0F0F),
+                    topLeft = Offset(mPos.x - 30f, mPos.y - 84f + sBob),
+                    size = Size(60f, 11f)
+                )
+                // Ammo pouches along belt
+                drawScope.drawRect(
+                    color = Color(0xFF2B2B2B),
+                    topLeft = Offset(mPos.x - 25f, mPos.y - 82f + sBob),
+                    size = Size(11f, 9f)
+                )
+                drawScope.drawRect(
+                    color = Color(0xFF2B2B2B),
+                    topLeft = Offset(mPos.x - 7.5f, mPos.y - 82f + sBob),
+                    size = Size(11f, 9f)
+                )
+                drawScope.drawRect(
+                    color = Color(0xFF2B2B2B),
+                    topLeft = Offset(mPos.x + 13f, mPos.y - 82f + sBob),
+                    size = Size(11f, 9f)
+                )
+
+                // 5. Compact Tactical Backpack & Comms Antenna
+                drawScope.drawRect(
+                    color = Color(0xFF1A1A1A),
+                    topLeft = Offset(mPos.x - 25f, mPos.y - 160f + sBob),
+                    size = Size(50f, 60f)
+                )
+                drawScope.drawRect(
+                    color = Color(0xFF282828),
+                    topLeft = Offset(mPos.x - 21f, mPos.y - 155f + sBob),
+                    size = Size(42f, 50f),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(3.8f)
+                )
+                // Support/Comms role antenna with blinking blue status LED
+                if (role == 0) {
+                    drawScope.drawLine(
+                        color = Color(0xFF121212),
+                        start = Offset(mPos.x - 21f, mPos.y - 160f + sBob),
+                        end = Offset(mPos.x - 25f, mPos.y - 210f + sBob),
+                        strokeWidth = 3.8f
+                    )
+                    drawScope.drawCircle(
+                        color = Color(0xFF00E5FF),
+                        radius = 3.8f,
+                        center = Offset(mPos.x - 25f, mPos.y - 210f + sBob)
+                    )
+                }
+
+                // 6. Tactical Armor Torso & Plate Carrier (Matte-Black / Charcoal)
+                val commandoTorsoPath = Path().apply {
+                    moveTo(mPos.x - 34f, mPos.y - 165f + sBob)
+                    lineTo(mPos.x + 34f, mPos.y - 165f + sBob)
+                    lineTo(mPos.x + 28f, mPos.y - 84f + sBob)
+                    lineTo(mPos.x - 28f, mPos.y - 84f + sBob)
+                    close()
+                    // Shoulder armor pauldrons
+                    moveTo(mPos.x - 36f, mPos.y - 165f + sBob)
+                    lineTo(mPos.x - 46f, mPos.y - 140f + sBob)
+                    lineTo(mPos.x - 34f, mPos.y - 130f + sBob)
+                    moveTo(mPos.x + 36f, mPos.y - 165f + sBob)
+                    lineTo(mPos.x + 46f, mPos.y - 140f + sBob)
+                    lineTo(mPos.x + 34f, mPos.y - 130f + sBob)
+                }
+                drawScope.drawPath(commandoTorsoPath, Color(0xFF171717))
+
+                // Plate Carrier Front Chest Plate
+                drawScope.drawRect(
+                    color = Color(0xFF262626),
+                    topLeft = Offset(mPos.x - 23f, mPos.y - 156f + sBob),
+                    size = Size(46f, 48f)
+                )
+                // MOLLE tactical webbing straps
+                drawScope.drawLine(
+                    color = Color(0xFF111111),
+                    start = Offset(mPos.x - 21f, mPos.y - 138f + sBob),
+                    end = Offset(mPos.x + 21f, mPos.y - 138f + sBob),
+                    strokeWidth = 3.8f
+                )
+                drawScope.drawLine(
+                    color = Color(0xFF111111),
+                    start = Offset(mPos.x - 21f, mPos.y - 120f + sBob),
+                    end = Offset(mPos.x + 21f, mPos.y - 120f + sBob),
+                    strokeWidth = 3.8f
+                )
+
+                // 7. Tactical Balaclava & Fast Ballistic Helmet
+                // Neck gaiter
+                drawScope.drawRect(
+                    color = Color(0xFF1C1C1C),
+                    topLeft = Offset(mPos.x - 12f, mPos.y - 176f + sBob),
+                    size = Size(24f, 15f)
+                )
+                // Ballistic Helmet dome (True 85-90% scale)
+                drawScope.drawCircle(
+                    color = Color(0xFF191919),
+                    radius = 34f,
+                    center = Offset(mPos.x, mPos.y - 205f + sBob)
+                )
+                // Front NVG mount / accessory shroud
+                drawScope.drawRect(
+                    color = Color(0xFF2D2D2D),
+                    topLeft = Offset(mPos.x - 10f, mPos.y - 212f + sBob),
+                    size = Size(20f, 8f)
+                )
+                // Tactical Visor / Dark Ballistic Goggles
+                drawScope.drawRect(
+                    color = Color(0xFF212529),
+                    topLeft = Offset(mPos.x - 18f, mPos.y - 200f + sBob),
+                    size = Size(36f, 16f)
+                )
+                // Subtle blue/gray lens reflection line
+                drawScope.drawLine(
+                    color = Color(0xFF455A64),
+                    start = Offset(mPos.x - 15f, mPos.y - 195f + sBob),
+                    end = Offset(mPos.x + 10f, mPos.y - 195f + sBob),
+                    strokeWidth = 3.8f
+                )
+                // Balaclava lower face mask
+                drawScope.drawRect(
+                    color = Color(0xFF141414),
+                    topLeft = Offset(mPos.x - 14f, mPos.y - 184f + sBob),
+                    size = Size(28f, 14f)
+                )
+
+                // 8. Modern Military Assault Rifle / Carbine (Held forward with recoil)
+                val gunTipX = mPos.x + 35f - sRecoil
+                val gunTipY = mPos.y - 120f + sBob
+                // Stock against shoulder
+                drawScope.drawLine(
+                    color = Color(0xFF121212),
+                    start = Offset(mPos.x + 6f, mPos.y - 140f + sBob),
+                    end = Offset(mPos.x + 16f, mPos.y - 130f + sBob),
+                    strokeWidth = 10f
+                )
+                // Receiver & handguard
+                drawScope.drawLine(
+                    color = Color(0xFF1E1E1E),
+                    start = Offset(mPos.x + 13f, mPos.y - 132f + sBob),
+                    end = Offset(gunTipX, gunTipY),
+                    strokeWidth = 9f
+                )
+                // Barrel extension
                 drawScope.drawLine(
                     color = Color(0xFF37474F),
-                    start = Offset(mPos.x + 4f, mPos.y - 14f),
-                    end = Offset(mPos.x + 16f, mPos.y - 30f),
-                    strokeWidth = 3f
+                    start = Offset(gunTipX - 8f, gunTipY),
+                    end = Offset(gunTipX + 13f, gunTipY),
+                    strokeWidth = 5.5f
                 )
+                // Curved ammo magazine
+                drawScope.drawLine(
+                    color = Color(0xFF262626),
+                    start = Offset(mPos.x + 21f, mPos.y - 125f + sBob),
+                    end = Offset(mPos.x + 27f, mPos.y - 110f + sBob),
+                    strokeWidth = 6f
+                )
+
+                // 9. Synchronized Muzzle Flash when Squad Fires
+                if (isSquadShooting && m <= 8) {
+                    val muzzlePos = Offset(gunTipX + 16f, gunTipY)
+                    // Outer golden flash glow
+                    drawScope.drawCircle(
+                        color = Color(0xFFFFC107).copy(alpha = 0.65f),
+                        radius = 14f,
+                        center = muzzlePos
+                    )
+                    // Inner white core
+                    drawScope.drawCircle(
+                        color = Color.White,
+                        radius = 5.5f,
+                        center = muzzlePos
+                    )
+                }
             }
         }
 

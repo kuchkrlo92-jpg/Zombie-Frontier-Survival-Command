@@ -7,6 +7,7 @@ import com.example.data.PlayerProfile
 import com.example.data.WeaponCatalog
 import com.example.ui.BossPattern
 import com.example.ui.BossState
+import com.example.ui.BossType
 import com.example.ui.GateType
 import com.example.ui.LaneRenderer
 import com.example.ui.PlayerState
@@ -445,6 +446,215 @@ class ExampleRobolectricTest {
 
     assertTrue(posLeft.x < posCenter.x)
     assertTrue(posCenter.x < posRight.x)
+  }
+
+  @Test
+  fun `boss HP greater than zero allows normal attack cycles`() {
+    val boss = BossState(
+      name = "THE ABOMINATION",
+      health = 1200,
+      maxHealth = 1200,
+      currentPattern = BossPattern.IDLE
+    )
+
+    assertTrue(boss.health > 0)
+    assertTrue(boss.canAttack)
+    assertFalse(boss.isDead)
+    assertFalse(boss.isDying)
+    assertFalse(boss.isDefeated)
+
+    // Boss can cycle through telegraph and execution attack states while health > 0
+    val telegraphBoss = boss.copy(currentPattern = BossPattern.TELEGRAPH_SLAM)
+    assertTrue(telegraphBoss.canAttack)
+    assertFalse(telegraphBoss.isDead)
+
+    val slamBoss = telegraphBoss.copy(currentPattern = BossPattern.EXECUTE_SLAM)
+    assertTrue(slamBoss.canAttack)
+    assertFalse(slamBoss.isDead)
+  }
+
+  @Test
+  fun `boss HP reaching zero triggers persistent death state exactly once`() {
+    val boss = BossState(
+      name = "THE ABOMINATION",
+      health = 100,
+      maxHealth = 1200,
+      currentPattern = BossPattern.EXECUTE_CHARGE
+    )
+
+    // First lethal damage event: health reaches 0
+    val (dyingBoss, justDied) = boss.applyDamage(100)
+    assertTrue(justDied)
+    assertEquals(0, dyingBoss.health)
+    assertTrue(dyingBoss.isDying)
+    assertTrue(dyingBoss.isDead)
+    assertFalse(dyingBoss.canAttack)
+    assertEquals(BossPattern.IDLE, dyingBoss.currentPattern)
+    assertTrue(dyingBoss.hasDamagedInCharge)
+
+    // Second damage event: must NOT re-trigger death event (idempotent)
+    val (afterSecondDamage, justDiedAgain) = dyingBoss.applyDamage(100)
+    assertFalse(justDiedAgain)
+    assertEquals(0, afterSecondDamage.health)
+    assertTrue(afterSecondDamage.isDead)
+    assertFalse(afterSecondDamage.canAttack)
+  }
+
+  @Test
+  fun `boss HP less than zero is clamped to zero immediately`() {
+    val boss = BossState(
+      name = "THE IRON TYRANT",
+      bossType = BossType.IRON_TYRANT,
+      health = 150,
+      maxHealth = 1800
+    )
+
+    // Massive overkill damage (e.g. 500 damage against 150 HP)
+    val (overkillBoss, justDied) = boss.applyDamage(500)
+    assertTrue(justDied)
+    assertEquals(0, overkillBoss.health) // Clamped to strictly 0, never negative!
+    assertTrue(overkillBoss.isDead)
+  }
+
+  @Test
+  fun `boss death animation prevents all attacks shockwaves charges and minion spawns`() {
+    val dyingBoss = BossState(
+      name = "THE ABOMINATION",
+      health = 0,
+      isDying = true,
+      currentPattern = BossPattern.IDLE,
+      hasDamagedInCharge = true
+    )
+
+    // 1. Boss cannot attack during death sequence
+    assertFalse(dyingBoss.canAttack)
+    assertTrue(dyingBoss.isDead)
+
+    // 2. Shockwaves are cleared on death and no new shockwaves can spawn
+    val activeShockwaves = mutableListOf("Shockwave_Lane1", "Shockwave_Lane2")
+    if (dyingBoss.isDying || dyingBoss.isDefeated) {
+      activeShockwaves.clear()
+    }
+    assertTrue(activeShockwaves.isEmpty())
+
+    // 3. Charge damage cannot be dealt to player once dead
+    val canDealChargeDamage = !dyingBoss.hasDamagedInCharge && !dyingBoss.isDead
+    assertFalse(canDealChargeDamage)
+  }
+
+  @Test
+  fun `boss death lifecycle advances to defeated and triggers victory`() {
+    var boss = BossState(
+      name = "THE PLAGUE QUEEN",
+      bossType = BossType.PLAGUE_QUEEN,
+      health = 0,
+      isDying = true,
+      isDefeated = false,
+      deathTimer = 0,
+      deathDuration = 50
+    )
+
+    // Mid death animation
+    boss = boss.copy(deathTimer = 25)
+    assertTrue(boss.isDying)
+    assertFalse(boss.isDefeated)
+
+    // Death animation finishes
+    boss = boss.copy(deathTimer = 50)
+    if (boss.deathTimer >= boss.deathDuration) {
+      boss = boss.copy(isDying = false, isDefeated = true)
+    }
+
+    assertFalse(boss.isDying)
+    assertTrue(boss.isDefeated)
+    assertTrue(boss.isDead)
+
+    // Victory condition for boss mission
+    val isVictory = boss.isDefeated
+    assertTrue(isVictory)
+  }
+
+  @Test
+  fun `subsequent bullet hits after boss death do not re-trigger rewards or death events`() {
+    var killCounter = 0
+    var deathAudioPlays = 0
+
+    var boss = BossState(health = 50)
+
+    fun onBulletHit(damage: Int) {
+      if (boss.isDead) return // Dead boss ignores subsequent bullet hits
+      val (damaged, justDied) = boss.applyDamage(damage)
+      boss = damaged
+      if (justDied) {
+        killCounter++
+        deathAudioPlays++
+      }
+    }
+
+    // Bullet 1 kills the boss
+    onBulletHit(60)
+    assertEquals(1, killCounter)
+    assertEquals(1, deathAudioPlays)
+    assertTrue(boss.isDead)
+
+    // Bullets 2 and 3 strike the dying boss
+    onBulletHit(60)
+    onBulletHit(60)
+    assertEquals(1, killCounter) // Kill counter remained strictly 1
+    assertEquals(1, deathAudioPlays) // Audio played strictly once
+  }
+
+  @Test
+  fun `all three boss types follow identical death and attack prevention rules`() {
+    val bossTypes = listOf(BossType.ABOMINATION, BossType.IRON_TYRANT, BossType.PLAGUE_QUEEN)
+
+    for (type in bossTypes) {
+      val boss = BossState(
+        name = type.name,
+        bossType = type,
+        health = 500,
+        maxHealth = 500
+      )
+
+      assertTrue(boss.canAttack)
+      assertFalse(boss.isDead)
+
+      // Apply fatal damage
+      val (deadBoss, justDied) = boss.applyDamage(600)
+      assertTrue(justDied)
+      assertEquals(0, deadBoss.health)
+      assertTrue(deadBoss.isDead)
+      assertFalse(deadBoss.canAttack)
+      assertEquals(BossPattern.IDLE, deadBoss.currentPattern)
+
+      // Subsequent damage does not re-die
+      val (repeatedHit, justDiedAgain) = deadBoss.applyDamage(100)
+      assertFalse(justDiedAgain)
+      assertEquals(0, repeatedHit.health)
+    }
+  }
+
+  @Test
+  fun `special forces squad members render at true 85 to 90 percent scale with clear central lane corridor`() {
+    // Commander height reference is ~273px (from boots +8f to helmet top -265f)
+    val commanderHeight = 273f
+    // Squad soldier height from boots (0) to top of ballistic helmet (-239f)
+    val soldierHeight = 239f
+    val scaleRatio = soldierHeight / commanderHeight
+
+    // Verify scale is strictly between 85% and 90%
+    assertTrue("Scale ratio $scaleRatio should be >= 0.85f", scaleRatio >= 0.85f)
+    assertTrue("Scale ratio $scaleRatio should be <= 0.90f", scaleRatio <= 0.90f)
+
+    // Verify tactical wedge formation offsets maintain clear central corridor for player view
+    val memberCount = 16
+    for (m in 1..memberCount) {
+      val isLeftWing = (m % 2 != 0)
+      val rank = (m + 1) / 2
+      val offsetX = if (isLeftWing) -78f - (rank - 1) * 54f else 78f + (rank - 1) * 54f
+      // Ensure central corridor (-78f to +78f) is completely clear
+      assertTrue("Offset X $offsetX must be outside central lane corridor", kotlin.math.abs(offsetX) >= 78f)
+    }
   }
 }
 

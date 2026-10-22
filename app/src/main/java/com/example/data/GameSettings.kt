@@ -15,6 +15,7 @@ object GameSettings {
     private const val KEY_DAMAGE_NUMBERS = "setting_damage_numbers"
     private const val KEY_JOYSTICK_SENSITIVITY = "setting_joystick_sensitivity" // 0.5f to 2.0f
     private const val KEY_DIFFICULTY = "setting_difficulty" // "EASY", "NORMAL", "HARD"
+    private const val KEY_ENVIRONMENT_MODE = "setting_environment_mode" // "DAY", "NIGHT"
 
     fun isSoundEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean(KEY_SOUND, true)
@@ -65,6 +66,13 @@ object GameSettings {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putString(KEY_DIFFICULTY, difficulty).apply()
     }
 
+    fun getEnvironmentMode(context: Context): String =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_ENVIRONMENT_MODE, "DAY") ?: "DAY"
+
+    fun setEnvironmentMode(context: Context, mode: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putString(KEY_ENVIRONMENT_MODE, mode).apply()
+    }
+
     fun restoreDefaults(context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_SOUND, true)
@@ -74,6 +82,7 @@ object GameSettings {
             .putBoolean(KEY_DAMAGE_NUMBERS, true)
             .putFloat(KEY_JOYSTICK_SENSITIVITY, 1.0f)
             .putString(KEY_DIFFICULTY, "NORMAL")
+            .putString(KEY_ENVIRONMENT_MODE, "DAY")
             .apply()
     }
 
