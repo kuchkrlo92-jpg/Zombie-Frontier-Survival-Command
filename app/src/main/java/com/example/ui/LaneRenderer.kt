@@ -464,25 +464,34 @@ object LaneRenderer {
                 val bossW = bLaneW * 3.2f
                 val bossH = bLaneW * 4.0f
 
-                when (boss.bossType) {
-                    BossType.ABOMINATION -> {
-                        val baseColor = if (boss.hitFlash > 0) Color.White else Color(0xFF2E7D32)
-                        drawScope.drawOval(baseColor, Offset(bPos.x - bossW / 2f, bPos.y - bossH), Size(bossW, bossH * 0.7f))
-                        drawScope.drawCircle(Color(0xFF76FF03), bossW * 0.15f, Offset(bPos.x - bossW * 0.2f, bPos.y - bossH * 0.6f))
-                        drawScope.drawCircle(Color(0xFFFF1744), 6f * bScale, Offset(bPos.x - bossW * 0.15f, bPos.y - bossH * 0.9f))
-                        drawScope.drawCircle(Color(0xFFFF1744), 6f * bScale, Offset(bPos.x + bossW * 0.15f, bPos.y - bossH * 0.9f))
+                when {
+                    boss.isDying -> {
+                        // Death animation: collapse and fade
+                        val collapse = boss.deathTimer.toFloat() / boss.deathDuration.toFloat()
+                        drawScope.drawOval(Color(0xFF424242), Offset(bPos.x - bossW / 2f + collapse * 20f, bPos.y - bossH + collapse * 50f), Size(bossW * (1f - collapse * 0.5f), bossH * (0.8f - collapse * 0.5f)))
                     }
-                    BossType.IRON_TYRANT -> {
-                        val armorColor = if (boss.hitFlash > 0) Color.White else Color(0xFF455A64)
-                        drawScope.drawRect(armorColor, Offset(bPos.x - bossW / 2f, bPos.y - bossH), Size(bossW, bossH * 0.8f))
-                        drawScope.drawRect(Color(0xFF37474F), Offset(bPos.x - bossW * 0.6f, bPos.y - bossH * 0.5f), Size(bossW * 0.3f, bossH * 0.4f))
-                        drawScope.drawRect(Color(0xFF00B0FF), Offset(bPos.x - bossW * 0.2f, bPos.y - bossH * 0.9f), Size(bossW * 0.4f, 8f * bScale))
-                    }
-                    BossType.PLAGUE_QUEEN -> {
-                        val queenColor = if (boss.hitFlash > 0) Color.White else Color(0xFF8E24AA)
-                        drawScope.drawOval(queenColor, Offset(bPos.x - bossW * 0.3f, bPos.y - bossH), Size(bossW * 0.6f, bossH))
-                        drawScope.drawPath(Path().apply { moveTo(bPos.x, bPos.y - bossH); lineTo(bPos.x - bossW * 0.2f, bPos.y - bossH * 0.5f) }, Color(0xFFC6FF00), style = androidx.compose.ui.graphics.drawscope.Stroke(4f * bScale))
-                        drawScope.drawCircle(queenColor, bossW * 0.25f, Offset(bPos.x, bPos.y - bossH * 1.05f))
+                    else -> {
+                        when (boss.bossType) {
+                            BossType.ABOMINATION -> {
+                                val baseColor = if (boss.hitFlash > 0) Color.White else Color(0xFF2E7D32)
+                                drawScope.drawOval(baseColor, Offset(bPos.x - bossW / 2f, bPos.y - bossH), Size(bossW, bossH * 0.7f))
+                                drawScope.drawCircle(Color(0xFF76FF03), bossW * 0.15f, Offset(bPos.x - bossW * 0.2f, bPos.y - bossH * 0.6f))
+                                drawScope.drawCircle(Color(0xFFFF1744), 6f * bScale, Offset(bPos.x - bossW * 0.15f, bPos.y - bossH * 0.9f))
+                                drawScope.drawCircle(Color(0xFFFF1744), 6f * bScale, Offset(bPos.x + bossW * 0.15f, bPos.y - bossH * 0.9f))
+                            }
+                            BossType.IRON_TYRANT -> {
+                                val armorColor = if (boss.hitFlash > 0) Color.White else Color(0xFF455A64)
+                                drawScope.drawRect(armorColor, Offset(bPos.x - bossW / 2f, bPos.y - bossH), Size(bossW, bossH * 0.8f))
+                                drawScope.drawRect(Color(0xFF37474F), Offset(bPos.x - bossW * 0.6f, bPos.y - bossH * 0.5f), Size(bossW * 0.3f, bossH * 0.4f))
+                                drawScope.drawRect(Color(0xFF00B0FF), Offset(bPos.x - bossW * 0.2f, bPos.y - bossH * 0.9f), Size(bossW * 0.4f, 8f * bScale))
+                            }
+                            BossType.PLAGUE_QUEEN -> {
+                                val queenColor = if (boss.hitFlash > 0) Color.White else Color(0xFF8E24AA)
+                                drawScope.drawOval(queenColor, Offset(bPos.x - bossW * 0.3f, bPos.y - bossH), Size(bossW * 0.6f, bossH))
+                                drawScope.drawPath(Path().apply { moveTo(bPos.x, bPos.y - bossH); lineTo(bPos.x - bossW * 0.2f, bPos.y - bossH * 0.5f) }, Color(0xFFC6FF00), style = androidx.compose.ui.graphics.drawscope.Stroke(4f * bScale))
+                                drawScope.drawCircle(queenColor, bossW * 0.25f, Offset(bPos.x, bPos.y - bossH * 1.05f))
+                            }
+                        }
                     }
                 }
 
@@ -522,19 +531,22 @@ object LaneRenderer {
                 else -> Color(0xFF455A64)
             }
             
-            // Running leg animation
-            val legPhase = (zombie.animPhase * 8f)
+            // Running/Stagger animation
+            val animPhase = if (zombie.hitFlash > 0) 0f else zombie.animPhase
+            val legPhase = (animPhase * 8f)
             val legOffset = sin(legPhase) * (8f * zScale)
+            val staggerOffset = if (zombie.hitFlash > 0) sin(zombie.hitFlash * 2f) * 10f * zScale else 0f
+            
             drawScope.drawLine(
                 color = Color(0xFF1B1B1B),
-                start = Offset(zPos.x - zW * 0.2f, zPos.y - zH * 0.2f),
-                end = Offset(zPos.x - zW * 0.2f + legOffset, zPos.y),
+                start = Offset(zPos.x - zW * 0.2f + staggerOffset, zPos.y - zH * 0.2f),
+                end = Offset(zPos.x - zW * 0.2f + legOffset + staggerOffset, zPos.y),
                 strokeWidth = 4f * zScale
             )
             drawScope.drawLine(
                 color = Color(0xFF1B1B1B),
-                start = Offset(zPos.x + zW * 0.2f, zPos.y - zH * 0.2f),
-                end = Offset(zPos.x + zW * 0.2f - legOffset, zPos.y),
+                start = Offset(zPos.x + zW * 0.2f + staggerOffset, zPos.y - zH * 0.2f),
+                end = Offset(zPos.x + zW * 0.2f - legOffset + staggerOffset, zPos.y),
                 strokeWidth = 4f * zScale
             )
 
@@ -679,17 +691,18 @@ object LaneRenderer {
         drawScope.drawRect(Color(0xFF000000), Offset(playerPos.x - 16f, playerPos.y - 2f), Size(12f, 10f))
         drawScope.drawRect(Color(0xFF000000), Offset(playerPos.x + 4f, playerPos.y - 2f), Size(12f, 10f))
 
-        // Legs (Tactical Pants)
+        // Legs (Tactical Pants with slight sway)
+        val sway = sin(state.player.runDistance * 2f) * 2f
         drawScope.drawLine(
             color = Color(0xFF212121),
             start = Offset(playerPos.x - 10f, playerPos.y - 12f),
-            end = Offset(playerPos.x - 10f + commanderAnim, playerPos.y),
+            end = Offset(playerPos.x - 10f + commanderAnim + sway, playerPos.y),
             strokeWidth = 8f
         )
         drawScope.drawLine(
             color = Color(0xFF212121),
             start = Offset(playerPos.x + 10f, playerPos.y - 12f),
-            end = Offset(playerPos.x + 10f - commanderAnim, playerPos.y),
+            end = Offset(playerPos.x + 10f - commanderAnim - sway, playerPos.y),
             strokeWidth = 8f
         )
 
@@ -756,8 +769,11 @@ object LaneRenderer {
             size = Size(40f, 20f)
         )
 
-        // Equipped Weapon Barrel held forward
-        val gunBarrelTip = Offset(playerPos.x + 40f, playerPos.y - 100f)
+        // Equipped Weapon Barrel held forward with Recoil
+        val timeSinceFire = System.currentTimeMillis() - state.player.lastFireTimeMs
+        val recoil = if (timeSinceFire < 80) (80 - timeSinceFire) * 0.2f else 0f
+        val gunBarrelTip = Offset(playerPos.x + 40f - recoil, playerPos.y - 100f)
+        
         drawScope.drawLine(
             color = Color(0xFF212121),
             start = Offset(playerPos.x + 14f, playerPos.y - 70f),
@@ -766,7 +782,6 @@ object LaneRenderer {
         )
 
         // Muzzle Flash effect (Enhanced)
-        val timeSinceFire = System.currentTimeMillis() - state.player.lastFireTimeMs
         if (timeSinceFire < 60) {
             // Inner core
             drawScope.drawCircle(

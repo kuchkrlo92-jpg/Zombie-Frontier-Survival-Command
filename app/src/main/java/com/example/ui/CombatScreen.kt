@@ -598,88 +598,104 @@ fun CombatScreen(
                 var bSlamCd = maxOf(0, boss.slamCooldown - 1)
                 var bChargeCd = maxOf(0, boss.chargeCooldown - 1)
                 var bSummonCd = maxOf(0, boss.summonCooldown - 1)
+                var bIsDying = boss.isDying
+                var bDeathTimer = boss.deathTimer
                 var bHasDamagedInCharge = boss.hasDamagedInCharge
                 var bTelegraphLane = boss.telegraphLane
                 var bLaneX = boss.visualLaneX
                 var bDistZ = boss.distanceZ
 
-                when (bPattern) {
-                    BossPattern.IDLE -> {
-                        bHasDamagedInCharge = false
-                        bDistZ = 130f
-                        // Choose next attack pattern based on cooldowns
-                        if (bSlamCd == 0) {
-                            bPattern = BossPattern.TELEGRAPH_SLAM
-                            bTimer = 0
-                            bTelegraphLane = state.player.currentLane
-                            SoundFx.playBossRoar(context)
-                        } else if (bChargeCd == 0) {
-                            bPattern = BossPattern.TELEGRAPH_CHARGE
-                            bTimer = 0
-                            bTelegraphLane = state.player.currentLane
-                            SoundFx.playBossRoar(context)
-                        } else if (bSummonCd == 0) {
-                            bPattern = BossPattern.TELEGRAPH_SUMMON
-                            bTimer = 0
-                            SoundFx.playBossRoar(context)
-                        }
+                if (bHealth <= 0 && !bIsDying) {
+                    bIsDying = true
+                    bDeathTimer = 0
+                    bPattern = BossPattern.IDLE
+                }
+
+                if (bIsDying) {
+                    bDeathTimer++
+                    if (bDeathTimer >= boss.deathDuration) {
+                        updatedBoss = null
+                        return@let
                     }
-                    BossPattern.TELEGRAPH_SLAM -> {
-                        if (bTimer > 32) {
-                            bPattern = BossPattern.EXECUTE_SLAM
-                            bTimer = 0
-                            bSlamCd = 110
-                            SoundFx.playBossSlam(context)
-                            GameSettings.triggerVibration(context, 45)
-                            screenShakeIntensity = 18f
-                            newShockwaves.add(LaneShockwave(lane = bTelegraphLane, distanceZ = bDistZ))
-                        }
-                    }
-                    BossPattern.EXECUTE_SLAM -> {
-                        if (bTimer > 15) {
-                            bPattern = BossPattern.IDLE
-                            bTimer = 0
-                        }
-                    }
-                    BossPattern.TELEGRAPH_CHARGE -> {
-                        bLaneX += (bTelegraphLane - bLaneX) * 0.15f
-                        if (bTimer > 35) {
-                            bPattern = BossPattern.EXECUTE_CHARGE
-                            bTimer = 0
-                            bChargeCd = 160
+                } else {
+                    when (bPattern) {
+                        BossPattern.IDLE -> {
                             bHasDamagedInCharge = false
-                        }
-                    }
-                    BossPattern.EXECUTE_CHARGE -> {
-                        bDistZ -= 7.5f * state.zombieSpeedMult // Charge forward down the lane scaled by difficulty!
-                        if (!bHasDamagedInCharge && bDistZ <= 6f && abs(newVisualX - bTelegraphLane) < 0.65f) {
-                            SoundFx.playPlayerHurt(context)
-                            GameSettings.triggerVibration(context, 60)
-                            screenShakeIntensity = 22f
-                            bHasDamagedInCharge = true
-                            val bossChargeDamage = (35 * state.zombieDamageMult).toInt()
-                            if (newPlayer.squadCount > 2) {
-                                newPlayer = newPlayer.copy(squadCount = maxOf(1, newPlayer.squadCount - 2))
-                            } else {
-                                newPlayer = newPlayer.copy(health = maxOf(0, newPlayer.health - bossChargeDamage))
+                            bDistZ = 130f
+                            // Choose next attack pattern based on cooldowns
+                            if (bSlamCd == 0) {
+                                bPattern = BossPattern.TELEGRAPH_SLAM
+                                bTimer = 0
+                                bTelegraphLane = state.player.currentLane
+                                SoundFx.playBossRoar(context)
+                            } else if (bChargeCd == 0) {
+                                bPattern = BossPattern.TELEGRAPH_CHARGE
+                                bTimer = 0
+                                bTelegraphLane = state.player.currentLane
+                                SoundFx.playBossRoar(context)
+                            } else if (bSummonCd == 0) {
+                                bPattern = BossPattern.TELEGRAPH_SUMMON
+                                bTimer = 0
+                                SoundFx.playBossRoar(context)
                             }
                         }
-                        if (bDistZ < -15f || bTimer > 40) {
+                        BossPattern.TELEGRAPH_SLAM -> {
+                            if (bTimer > 32) {
+                                bPattern = BossPattern.EXECUTE_SLAM
+                                bTimer = 0
+                                bSlamCd = 110
+                                SoundFx.playBossSlam(context)
+                                GameSettings.triggerVibration(context, 45)
+                                screenShakeIntensity = 18f
+                                newShockwaves.add(LaneShockwave(lane = bTelegraphLane, distanceZ = bDistZ))
+                            }
+                        }
+                        BossPattern.EXECUTE_SLAM -> {
+                            if (bTimer > 15) {
+                                bPattern = BossPattern.IDLE
+                                bTimer = 0
+                            }
+                        }
+                        BossPattern.TELEGRAPH_CHARGE -> {
+                            bLaneX += (bTelegraphLane - bLaneX) * 0.15f
+                            if (bTimer > 35) {
+                                bPattern = BossPattern.EXECUTE_CHARGE
+                                bTimer = 0
+                                bChargeCd = 160
+                                bHasDamagedInCharge = false
+                            }
+                        }
+                        BossPattern.EXECUTE_CHARGE -> {
+                            bDistZ -= 7.5f * state.zombieSpeedMult
+                            if (!bHasDamagedInCharge && bDistZ <= 6f && abs(newVisualX - bTelegraphLane) < 0.65f) {
+                                SoundFx.playPlayerHurt(context)
+                                GameSettings.triggerVibration(context, 60)
+                                screenShakeIntensity = 22f
+                                bHasDamagedInCharge = true
+                                val bossChargeDamage = (35 * state.zombieDamageMult).toInt()
+                                if (newPlayer.squadCount > 2) {
+                                    newPlayer = newPlayer.copy(squadCount = maxOf(1, newPlayer.squadCount - 2))
+                                } else {
+                                    newPlayer = newPlayer.copy(health = maxOf(0, newPlayer.health - bossChargeDamage))
+                                }
+                            }
+                            if (bDistZ < -15f || bTimer > 40) {
+                                bPattern = BossPattern.IDLE
+                                bDistZ = 130f
+                                bTimer = 0
+                            }
+                        }
+                        BossPattern.TELEGRAPH_SUMMON -> {
+                            if (bTimer > 25) {
+                                bPattern = BossPattern.EXECUTE_SUMMON
+                                bTimer = 0
+                                bSummonCd = 200
+                            }
+                        }
+                        BossPattern.EXECUTE_SUMMON -> {
                             bPattern = BossPattern.IDLE
-                            bDistZ = 130f
                             bTimer = 0
                         }
-                    }
-                    BossPattern.TELEGRAPH_SUMMON -> {
-                        if (bTimer > 25) {
-                            bPattern = BossPattern.EXECUTE_SUMMON
-                            bTimer = 0
-                            bSummonCd = 200
-                        }
-                    }
-                    BossPattern.EXECUTE_SUMMON -> {
-                        bPattern = BossPattern.IDLE
-                        bTimer = 0
                     }
                 }
 
@@ -694,7 +710,9 @@ fun CombatScreen(
                     telegraphLane = bTelegraphLane,
                     visualLaneX = bLaneX,
                     distanceZ = bDistZ,
-                    hitFlash = maxOf(0, boss.hitFlash - 1)
+                    hitFlash = maxOf(0, boss.hitFlash - 1),
+                    isDying = bIsDying,
+                    deathTimer = bDeathTimer
                 )
             }
 
