@@ -65,12 +65,45 @@ object LaneRenderer {
         return Triple(Offset(screenX, screenY), depthFactor, laneWidth)
     }
 
+    private var cachedCommanderBitmap: android.graphics.Bitmap? = null
+
+    private fun getCommanderBitmap(context: android.content.Context?): android.graphics.Bitmap? {
+        if (cachedCommanderBitmap == null && context != null) {
+            try {
+                cachedCommanderBitmap = android.graphics.BitmapFactory.decodeResource(
+                    context.resources,
+                    com.example.R.drawable.commander_soldier
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        return cachedCommanderBitmap
+    }
+
+    private var cachedZombieBitmap: android.graphics.Bitmap? = null
+
+    private fun getZombieBitmap(context: android.content.Context?): android.graphics.Bitmap? {
+        if (cachedZombieBitmap == null && context != null) {
+            try {
+                cachedZombieBitmap = android.graphics.BitmapFactory.decodeResource(
+                    context.resources,
+                    com.example.R.drawable.zombie_enemy
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        return cachedZombieBitmap
+    }
+
     fun renderScene(
         drawScope: DrawScope,
         state: CombatState,
         width: Float,
         height: Float,
-        environmentMode: String = "DAY"
+        environmentMode: String = "DAY",
+        context: android.content.Context? = null
     ) {
         val horizonY = height * 0.28f
         val horizonX = width * 0.5f
@@ -636,7 +669,8 @@ object LaneRenderer {
             }
         }
 
-        // 10. Zombie Swarms Sorted by Distance
+        // 10. Zombie Swarms Sorted by Distance (Rendered using uploaded zombie reference image)
+        val zombieBitmap = getZombieBitmap(context)
         val sortedZombies = state.zombies.sortedByDescending { it.distanceZ }
         for (zombie in sortedZombies) {
             val z = zombie.distanceZ
@@ -649,106 +683,54 @@ object LaneRenderer {
             
             val scaleMult = when {
                 isBrute -> 1.6f
-                isRunner -> 0.8f
-                isSpitter -> 0.9f
+                isRunner -> 0.85f
+                isSpitter -> 0.95f
                 else -> 1.0f
             }
-            val zW = zLaneW * 0.45f * scaleMult
-            val zH = zLaneW * 0.75f * scaleMult
+            val zW = zLaneW * 0.95f * scaleMult * zScale
+            val zH = zLaneW * 1.35f * scaleMult * zScale
 
-            val bodyColor = when {
-                zombie.hitFlash > 0 -> Color.White
-                isBrute -> Color(0xFF33691E)
-                isRunner -> Color(0xFFBF360C)
-                isSpitter -> Color(0xFF388E3C)
-                else -> Color(0xFF455A64)
-            }
-            
-            // Running/Stagger animation
-            val animPhase = if (zombie.hitFlash > 0) 0f else zombie.animPhase
-            val legPhase = (animPhase * 8f)
-            val legOffset = sin(legPhase) * (8f * zScale)
-            val staggerOffset = if (zombie.hitFlash > 0) sin(zombie.hitFlash * 2f) * 10f * zScale else 0f
-            
-            drawScope.drawLine(
-                color = Color(0xFF1B1B1B),
-                start = Offset(zPos.x - zW * 0.2f + staggerOffset, zPos.y - zH * 0.2f),
-                end = Offset(zPos.x - zW * 0.2f + legOffset + staggerOffset, zPos.y),
-                strokeWidth = 4f * zScale
-            )
-            drawScope.drawLine(
-                color = Color(0xFF1B1B1B),
-                start = Offset(zPos.x + zW * 0.2f + staggerOffset, zPos.y - zH * 0.2f),
-                end = Offset(zPos.x + zW * 0.2f - legOffset + staggerOffset, zPos.y),
-                strokeWidth = 4f * zScale
+            // Shadow under zombie
+            drawScope.drawOval(
+                color = Color(0x55000000),
+                topLeft = Offset(zPos.x - zW * 0.4f, zPos.y - 6f),
+                size = Size(zW * 0.8f, 16f * zScale)
             )
 
-            // Torso (Layered decaying body with subtle sway)
-            val torsoSway = sin(zombie.animPhase * 5f) * 4f
-            drawScope.drawPath(Path().apply {
-                moveTo(zPos.x - zW / 2f + torsoSway, zPos.y - zH)
-                lineTo(zPos.x + zW / 2f + torsoSway, zPos.y - zH)
-                lineTo(zPos.x + zW * 0.4f + torsoSway, zPos.y - zH * 0.3f)
-                lineTo(zPos.x - zW * 0.4f + torsoSway, zPos.y - zH * 0.3f)
-                close()
-            }, bodyColor)
-            // Infection accent
-            drawScope.drawRect(
-                color = Color(0x6676FF03),
-                topLeft = Offset(zPos.x - zW * 0.3f, zPos.y - zH * 0.8f),
-                size = Size(zW * 0.6f, zH * 0.4f)
-            )
-
-            if (isBrute) {
-                // Riot armor fragments on Brute (Detailed)
-                drawScope.drawRect(Color(0xFF37474F), Offset(zPos.x - zW * 0.5f, zPos.y - zH * 0.9f), Size(zW * 1.0f, zH * 0.25f))
-                drawScope.drawRect(Color(0xFF263238), Offset(zPos.x - zW * 0.4f, zPos.y - zH * 0.85f), Size(zW * 0.8f, zH * 0.15f), style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
-            }
-            
-            // Head (More detail)
-            val headRadius = zW * (if (isBrute) 0.4f else 0.28f)
-            drawScope.drawCircle(
-                color = if (isBrute) Color(0xFF1B5E20) else Color(0xFF263238),
-                radius = headRadius,
-                center = Offset(zPos.x, zPos.y - zH - headRadius * 0.5f)
-            )
-            // Jaw detail
-            drawScope.drawRect(Color(0xFF1B1B1B), Offset(zPos.x - headRadius * 0.4f, zPos.y - zH - headRadius * 0.2f), Size(headRadius * 0.8f, headRadius * 0.5f))
-
-
-            // Glowing Eyes (Enhanced with slight glow effect)
-            val eyeColor = when {
-                isRunner -> Color(0xFFFF9100)
-                isSpitter -> Color(0xFFC6FF00)
-                isBrute -> Color(0xFFFF1744)
-                else -> Color(0xFFFFD54F)
-            }
-            // Primary eye
-            drawScope.drawCircle(eyeColor, radius = 3.5f * zScale, center = Offset(zPos.x - headRadius * 0.4f, zPos.y - zH - headRadius * 0.5f))
-            drawScope.drawCircle(eyeColor, radius = 3.5f * zScale, center = Offset(zPos.x + headRadius * 0.4f, zPos.y - zH - headRadius * 0.5f))
-            // Secondary aura
-            drawScope.drawCircle(eyeColor.copy(alpha = 0.4f), radius = 6f * zScale, center = Offset(zPos.x - headRadius * 0.4f, zPos.y - zH - headRadius * 0.5f))
-            drawScope.drawCircle(eyeColor.copy(alpha = 0.4f), radius = 6f * zScale, center = Offset(zPos.x + headRadius * 0.4f, zPos.y - zH - headRadius * 0.5f))
-
-            
-            if (isSpitter) {
-                // Toxic bubbling effect
-                val bubblePhase = (System.currentTimeMillis() * 0.01).toFloat()
-                drawScope.drawCircle(Color(0xAA76FF03), radius = headRadius * 0.5f + sin(bubblePhase)*2f, center = Offset(zPos.x, zPos.y - zH - headRadius * 1.2f))
+            drawScope.drawIntoCanvas { canvas ->
+                if (zombieBitmap != null && !isBrute) {
+                    val destLeft = zPos.x - zW / 2f + sin(zombie.animPhase * 5f) * 4f
+                    val destTop = zPos.y - zH + abs(sin(zombie.animPhase * 8f)) * 5f
+                    val destRect = android.graphics.RectF(
+                        destLeft,
+                        destTop,
+                        destLeft + zW,
+                        destTop + zH
+                    )
+                    canvas.nativeCanvas.drawBitmap(zombieBitmap, null, destRect, null)
+                } else {
+                    // Fallback or Brute rendering
+                    val bodyColor = when {
+                        zombie.hitFlash > 0 -> Color.White
+                        isBrute -> Color(0xFF33691E)
+                        else -> Color(0xFF455A64)
+                    }
+                    drawScope.drawRect(bodyColor, Offset(zPos.x - zW * 0.3f, zPos.y - zH * 0.8f), Size(zW * 0.6f, zH * 0.8f))
+                }
             }
 
             // Zombie Mini Health Bar
             if (zombie.health < zombie.maxHealth) {
-                val zHpW = zW * 1.1f
+                val zHpW = zW * 0.9f
                 val zHpRatio = zombie.health.toFloat() / zombie.maxHealth.toFloat()
                 drawScope.drawRect(
                     color = Color.Black,
-                    topLeft = Offset(zPos.x - zHpW / 2f, zPos.y - zH - headRadius * 2f),
+                    topLeft = Offset(zPos.x - zHpW / 2f, zPos.y - zH - 12f * zScale),
                     size = Size(zHpW, 4f * zScale)
                 )
                 drawScope.drawRect(
                     color = Color(0xFFFF5252),
-                    topLeft = Offset(zPos.x - zHpW / 2f, zPos.y - zH - headRadius * 2f),
+                    topLeft = Offset(zPos.x - zHpW / 2f, zPos.y - zH - 12f * zScale),
                     size = Size(zHpW * zHpRatio, 4f * zScale)
                 )
             }
@@ -1013,126 +995,51 @@ object LaneRenderer {
             }
         }
 
-        // Main Commander: Elite Special Forces Commando (In center)
+        // Main Commander: Elite Special Forces Commando rendered from uploaded reference image
+        val commanderBitmap = getCommanderBitmap(context)
         val commanderAnim = sin(state.player.walkAnimPhase * 10f) * 6f
-        val armorColor = Color(0xFF1B1B1B)
-        val armorHighlight = Color(0xFF424242)
-        val visorColor = Color(0xFF000000)
-        val visorGlow = Color(0xFF1A1A1A)
 
         // Shadow under player
         drawScope.drawOval(
             color = Color(0x66000000),
-            topLeft = Offset(playerPos.x - 30f, playerPos.y + 4f),
-            size = Size(60f, 20f)
+            topLeft = Offset(playerPos.x - 38f, playerPos.y + 4f),
+            size = Size(76f, 22f)
         )
 
-        // Combat Boots
-        drawScope.drawRect(Color(0xFF000000), Offset(playerPos.x - 16f, playerPos.y - 2f), Size(12f, 10f))
-        drawScope.drawRect(Color(0xFF000000), Offset(playerPos.x + 4f, playerPos.y - 2f), Size(12f, 10f))
-
-        // Legs (Tactical Pants with slight sway)
-        val sway = sin(state.player.runDistance * 2f) * 2f
-        drawScope.drawLine(
-            color = Color(0xFF212121),
-            start = Offset(playerPos.x - 10f, playerPos.y - 12f),
-            end = Offset(playerPos.x - 10f + commanderAnim + sway, playerPos.y),
-            strokeWidth = 8f
-        )
-        drawScope.drawLine(
-            color = Color(0xFF212121),
-            start = Offset(playerPos.x + 10f, playerPos.y - 12f),
-            end = Offset(playerPos.x + 10f - commanderAnim - sway, playerPos.y),
-            strokeWidth = 8f
-        )
-
-        // Tactical Armor Torso (Increased size with added detail)
-        val torsoPath = Path().apply {
-            // Main torso
-            moveTo(playerPos.x - 50f, playerPos.y - 150f)
-            lineTo(playerPos.x + 50f, playerPos.y - 150f)
-            lineTo(playerPos.x + 45f, playerPos.y - 80f)
-            lineTo(playerPos.x - 45f, playerPos.y - 80f)
-            close()
-            // Shoulder plates
-            moveTo(playerPos.x - 55f, playerPos.y - 150f)
-            lineTo(playerPos.x - 65f, playerPos.y - 130f)
-            lineTo(playerPos.x - 50f, playerPos.y - 120f)
-            moveTo(playerPos.x + 55f, playerPos.y - 150f)
-            lineTo(playerPos.x + 65f, playerPos.y - 130f)
-            lineTo(playerPos.x + 50f, playerPos.y - 120f)
+        drawScope.drawIntoCanvas { canvas ->
+            if (commanderBitmap != null) {
+                val bWidth = 170f
+                val bHeight = 240f
+                val destLeft = playerPos.x - bWidth / 2f + commanderAnim * 0.3f
+                val destTop = playerPos.y - bHeight + abs(commanderAnim) * 0.4f
+                val destRect = android.graphics.RectF(
+                    destLeft,
+                    destTop,
+                    destLeft + bWidth,
+                    destTop + bHeight
+                )
+                canvas.nativeCanvas.drawBitmap(commanderBitmap, null, destRect, null)
+            } else {
+                // Fallback procedural shape if bitmap is not loaded
+                val armorColor = Color(0xFF1B1B1B)
+                drawScope.drawRect(armorColor, Offset(playerPos.x - 45f, playerPos.y - 150f), Size(90f, 130f))
+            }
         }
-        drawScope.drawPath(torsoPath, armorColor)
-        
-        // Belt line
-        drawScope.drawRect(Color(0xFF000000), Offset(playerPos.x - 45f, playerPos.y - 85f), Size(90f, 6f))
-        
-        // Chest armor plating
-        drawScope.drawRect(
-            color = armorHighlight,
-            topLeft = Offset(playerPos.x - 36f, playerPos.y - 140f),
-            size = Size(72f, 45f)
-        )
-        // Tactical Straps
-        drawScope.drawLine(Color(0xFF000000), Offset(playerPos.x - 45f, playerPos.y - 180f), Offset(playerPos.x - 45f, playerPos.y - 80f), 8f)
-        drawScope.drawLine(Color(0xFF000000), Offset(playerPos.x + 45f, playerPos.y - 180f), Offset(playerPos.x + 45f, playerPos.y - 80f), 8f)
 
-        // Combat Backpack (Detailed)
-        drawScope.drawRect(
-            color = Color(0xFF1A1A1A),
-            topLeft = Offset(playerPos.x - 45f, playerPos.y - 175f),
-            size = Size(90f, 90f)
-        )
-        drawScope.drawRect(
-            color = Color(0xFF333333),
-            topLeft = Offset(playerPos.x - 40f, playerPos.y - 170f),
-            size = Size(80f, 80f),
-            style = androidx.compose.ui.graphics.drawscope.Stroke(4f)
-        )
-
-        // Tactical Helmet with Visor (Larger)
-        drawScope.drawCircle(
-            color = armorColor,
-            radius = 55f,
-            center = Offset(playerPos.x, playerPos.y - 210f + abs(commanderAnim) * 0.3f)
-        )
-        // Combat Visor
-        drawScope.drawRect(
-            color = visorColor,
-            topLeft = Offset(playerPos.x - 35f, playerPos.y - 230f + abs(commanderAnim) * 0.3f),
-            size = Size(70f, 35f)
-        )
-        // Tactical Mask
-        drawScope.drawRect(
-            color = Color(0xFF333333),
-            topLeft = Offset(playerPos.x - 20f, playerPos.y - 195f + abs(commanderAnim) * 0.3f),
-            size = Size(40f, 20f)
-        )
-
-        // Equipped Weapon Barrel held forward with Recoil
+        // Equipped Weapon Barrel held forward with Recoil & Muzzle Flash
         val timeSinceFire = System.currentTimeMillis() - state.player.lastFireTimeMs
-        val recoil = if (timeSinceFire < 80) (80 - timeSinceFire) * 0.2f else 0f
-        val gunBarrelTip = Offset(playerPos.x + 40f - recoil, playerPos.y - 100f)
-        
-        drawScope.drawLine(
-            color = Color(0xFF212121),
-            start = Offset(playerPos.x + 14f, playerPos.y - 70f),
-            end = gunBarrelTip,
-            strokeWidth = 14f
-        )
+        val recoil = if (timeSinceFire < 80) (80 - timeSinceFire) * 0.25f else 0f
+        val gunBarrelTip = Offset(playerPos.x + 45f - recoil, playerPos.y - 110f)
 
-        // Muzzle Flash effect (Enhanced)
         if (timeSinceFire < 60) {
-            // Inner core
             drawScope.drawCircle(
-                color = Color(0xFFFFFFFF),
-                radius = 8f,
+                color = Color.White,
+                radius = 9f,
                 center = gunBarrelTip
             )
-            // Outer glow
             drawScope.drawCircle(
-                color = Color(0xFFFFC107).copy(alpha = 0.6f),
-                radius = 20f,
+                color = Color(0xFFFFC107).copy(alpha = 0.65f),
+                radius = 24f,
                 center = gunBarrelTip
             )
         }

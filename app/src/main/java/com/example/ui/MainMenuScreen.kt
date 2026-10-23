@@ -136,7 +136,7 @@ fun MainMenuScreen(
                     )
                 }
 
-                Spacer(Modifier.height(18.dp))
+
 
                 // 2x2 Tactical Grid Buttons
                 Row(

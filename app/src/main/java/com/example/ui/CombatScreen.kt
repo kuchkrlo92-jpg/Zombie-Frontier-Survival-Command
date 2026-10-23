@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.navigation.NavController
@@ -1027,7 +1028,8 @@ fun CombatScreen(
                 state = combatState,
                 width = size.width,
                 height = size.height,
-                environmentMode = environmentMode
+                environmentMode = environmentMode,
+                context = context
             )
         }
 
